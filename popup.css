@@ -39,7 +39,9 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-size: 13px;
   line-height: 1.45;
-  user-select: none;
+  /* Текст выделяется и копируется — чтобы переслать в ИИ или в тикет.
+     Невыделяемыми ниже оставлены только элементы управления. */
+  user-select: text;
 }
 
 .container {
@@ -623,4 +625,30 @@ code {
 .aia-chain .aia-root {
   color: #86efac;
   font-weight: 600;
+}
+
+/* Элементы управления выделять незачем — это мешает попасть по кнопке */
+.btn, .btn-icon, .btn-copy-sm, .btn-remove-wl, summary,
+.level-badge, .status-icon, .aia-mark, .aia-spinner, .select-input {
+  user-select: none;
+}
+
+/* Содержательный текст ведёт себя как текст */
+.detail-value, .fingerprint-code, .status-description, .status-headline,
+.site-domain, .aia-name, .aia-verdict, .rootstore-info, .help-content {
+  cursor: text;
+}
+
+/* Технические подробности внутри карточки сведений */
+.tech-details {
+  margin-top: 6px;
+  border-top: 1px solid var(--border-color);
+}
+.tech-summary {
+  padding: 8px 0 6px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.tech-details .detail-row {
+  padding-top: 0;
 }

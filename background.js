@@ -69,7 +69,14 @@ async function initRootStore() {
       if (data.updatedAt) rootStoreUpdatedAt = data.updatedAt;
     }
     if (res.customRoots && Object.keys(res.customRoots).length > 0) {
-      trustedRootsMap = { ...trustedRootsMap, ...res.customRoots };
+      // Поэлементно, а не Object.assign: скачанная запись не должна затирать
+      // ключ и subject у встроенной, даже если сама их не содержит.
+      for (const [hash, entry] of Object.entries(res.customRoots)) {
+        const prev = trustedRootsMap[hash];
+        trustedRootsMap[hash] = prev
+          ? { ...prev, ...entry, subject: entry.subject || prev.subject, spki: entry.spki || prev.spki }
+          : entry;
+      }
       if (res.rootStoreUpdatedAt) rootStoreUpdatedAt = res.rootStoreUpdatedAt;
     }
   } catch (e) {
@@ -459,14 +466,17 @@ function updateBrowserAction(tabId, data) {
 
     // Динамическая иконка
     const theme = data.iconTheme || 'default';
-    chrome.action.setIcon({
+    // setIcon возвращает промис: без catch отказ всплывает необработанным
+    const applied = chrome.action.setIcon({
       tabId,
       path: {
         "16": `icons/icon-${theme}-16.png`,
         "32": `icons/icon-${theme}-32.png`,
-        "48": `icons/icon-${theme}-48.png`
+        "48": `icons/icon-${theme}-48.png`,
+        "128": `icons/icon-${theme}-128.png`
       }
     });
+    if (applied && applied.catch) applied.catch(() => {});
   } catch (e) {
     // Tab might have closed
   }
@@ -597,6 +607,17 @@ function registerWebRequestListener() {
 registerWebRequestListener();
 
 // Очистка памяти при закрытии вкладки
+// Chrome сбрасывает пер-вкладочные значок и бейдж при коммите навигации.
+// На части страниц (в том числе предзагруженных, как gemini.google.com) коммит
+// происходит уже ПОСЛЕ onHeadersReceived, и значок откатывался к синему.
+// Поэтому применяем сохранённый статус ещё раз, когда вкладка догрузилась.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== 'complete') return;
+  loadTabStatus(tabId).then(status => {
+    if (status) updateBrowserAction(tabId, status);
+  });
+});
+
 chrome.tabs.onRemoved.addListener(tabId => {
   tabStatusMap.delete(tabId);
   chrome.storage.session.remove('tab_' + tabId).catch(() => {});
@@ -633,7 +654,19 @@ async function updateRootStoreFromGoogle() {
 
     const parsed = parseCertificate(der);
     const name = [parsed?.subject?.O, parsed?.subject?.CN].filter(Boolean).join(' / ') || 'Google Root';
-    downloaded[hashHex] = { name, source: 'Google Chrome Root Store (Online)' };
+    // Без subject и spki скачанная запись бесполезна для findIssuingRoot,
+    // а накладывалась она поверх полноценной встроенной — из-за этого
+    // цепочки к GlobalSign переставали достраиваться до корня.
+    const rb = new Uint8Array(der);
+    const rroot = readTLV(rb, 0);
+    const rsubj = rroot ? getSubjectDer(rb, rroot) : null;
+    const rspki = rroot ? getSpkiNode(rb, rroot) : null;
+    downloaded[hashHex] = {
+      name,
+      source: 'Google Chrome Root Store (Online)',
+      subject: rsubj ? bytesToB64(rsubj) : '',
+      spki: rspki ? bytesToB64(rb.slice(rspki.start, rspki.end)) : ''
+    };
     newRoots++;
   }
 

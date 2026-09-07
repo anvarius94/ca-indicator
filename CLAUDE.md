@@ -116,6 +116,24 @@ interchangeable — `null` must never be reported to the user as a failed signat
 `test_aia_chain.js` extracts these functions straight out of `background.js` and runs them against
 live sites, so it catches drift between the tested code and the shipped code.
 
+**Every root store entry must carry `subject` and `spki`.** `findIssuingRoot()` skips entries
+without them, and `updateRootStoreFromGoogle()` once wrote `{name, source}` only. Those partial
+entries merged *over* the complete bundled ones and cut the usable root count from 145 to 25, which
+silently broke chain completion for every CA whose intermediate omits a root AIA (GlobalSign, so
+support.kaspersky.ru). The merge in `initRootStore()` is now per-key and preserves `subject`/`spki`
+from the bundled entry. If you add another writer to `customRoots`, it must populate both fields.
+
+### Tab action state is re-applied, not set once
+
+Chrome resets tab-specific badge and icon when a navigation commits, and on some pages (prerendered
+Google properties among them) the commit lands *after* `onHeadersReceived` — leaving the default
+blue icon on a perfectly verified page. So `chrome.tabs.onUpdated` re-applies the stored status
+once the tab reports `complete`. Treat `updateBrowserAction` as idempotent and safe to call
+repeatedly; never assume the single call from the webRequest listener is the one that sticks.
+
+`chrome.action.setIcon` returns a promise in MV3 — the surrounding `try`/`catch` does not catch its
+rejection, so it is caught explicitly.
+
 ### Versioning and git
 
 The version string lives in **three** places: `manifest.json` `version`, `manifest.json` `name`
@@ -218,6 +236,9 @@ those two counters:
 These exist in the source and are not wired up — do not assume they work:
 
 - `badge-hash-verified` now reflects `hasSct`, not the root-store hash.
+- The popup is selectable text by default (`user-select: text` on `body`); controls opt out. The
+  "Скопировать отчёт" button serialises the whole verdict plus the AIA chain as plain text, which is
+  what users paste into a chat — keep it in sync when adding fields to the popup.
 - The `GET_TAB_STATUS` response still carries `isSecurityInfoSupported` and `securityInfoError`
   that the popup does not surface anywhere.
 - `content.js` never receives a `flag_required` push, so a page whose flag is off shows no in-page

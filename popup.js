@@ -26,6 +26,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const elAiaLoader = document.getElementById('aia-loader');
   const elAiaVerdict = document.getElementById('aia-verdict');
   const elAiaChain = document.getElementById('aia-chain');
+  const btnCopyReport = document.getElementById('btn-copy-report');
+
+  // Последний результат перепроверки — попадает в отчёт
+  let lastAia = null;
 
   let currentTabStatus = null;
   let currentWhitelist = [];
@@ -183,6 +187,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           ((res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'нет ответа');
         return;
       }
+
+      lastAia = res;
 
       const root = res.chain.find(c => c.knownRootName);
       if (res.trusted && root) {
@@ -407,6 +413,49 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       li.appendChild(btnDel);
       elWhitelistItems.appendChild(li);
+    });
+  }
+
+  // Отчёт простым текстом: удобно вставить в переписку или в чат с ИИ
+  function buildReport() {
+    const L = [];
+    L.push('CA Indicator v' + chrome.runtime.getManifest().version + ' — отчёт о сертификате');
+    L.push('Сайт: ' + elSiteDomain.textContent);
+    L.push('Вердикт: ' + elLevelBadge.textContent + ' — ' + elHeadline.textContent);
+    L.push('Издатель: ' + elIssuer.textContent);
+    L.push('Для домена: ' + elSubject.textContent);
+    L.push('SHA-256: ' + elFingerprint.textContent);
+    L.push('');
+    L.push('Пояснение: ' + elDesc.textContent);
+
+    if (lastAia) {
+      L.push('');
+      L.push('Перепроверка цепочки по AIA:');
+      L.push('  ' + (elAiaVerdict.textContent || '—'));
+      if (lastAia.chain && lastAia.chain.length) {
+        L.push('  Цепочка:');
+        lastAia.chain.forEach((c, i) => {
+          const sig = c.signatureVerified === true ? 'подпись проверена'
+            : c.signatureVerified === false ? 'ПОДПИСЬ НЕ СХОДИТСЯ'
+            : c.knownRootName ? 'корень из базы' : 'подпись не проверялась';
+          L.push('    ' + (i + 1) + '. ' + c.subject + '  [' + sig + ']');
+          L.push('       SHA-256: ' + c.fingerprint);
+        });
+      }
+    }
+    return L.join('\n');
+  }
+
+  if (btnCopyReport) {
+    btnCopyReport.addEventListener('click', async () => {
+      const orig = btnCopyReport.textContent;
+      try {
+        await navigator.clipboard.writeText(buildReport());
+        btnCopyReport.textContent = '\u2713 Отчёт скопирован';
+      } catch (e) {
+        btnCopyReport.textContent = '\u2715 Не удалось скопировать';
+      }
+      setTimeout(() => { btnCopyReport.textContent = orig; }, 2000);
     });
   }
 

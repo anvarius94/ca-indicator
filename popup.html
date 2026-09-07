@@ -84,13 +84,16 @@
         <span id="detail-subject" class="detail-value">—</span>
       </div>
 
-      <div class="detail-row">
-        <span class="detail-label">SHA-256 Отпечаток:</span>
-        <div class="fingerprint-wrapper">
-          <code id="detail-fingerprint" class="fingerprint-code">—</code>
-          <button id="btn-copy-fp" class="btn-icon" title="Скопировать отпечаток">📋</button>
+      <details class="tech-details">
+        <summary class="tech-summary">Технические подробности</summary>
+        <div class="detail-row">
+          <span class="detail-label">SHA-256 отпечаток:</span>
+          <div class="fingerprint-wrapper">
+            <code id="detail-fingerprint" class="fingerprint-code">—</code>
+            <button id="btn-copy-fp" class="btn-icon" title="Скопировать отпечаток">📋</button>
+          </div>
         </div>
-      </div>
+      </details>
     </div>
 
     <!-- Точная перепроверка цепочки по AIA -->
@@ -106,6 +109,7 @@
 
     <!-- Actions Area -->
     <div id="action-area" class="action-area">
+      <button id="btn-copy-report" class="btn btn-secondary">📋 Скопировать отчёт</button>
       <button id="btn-whitelist" class="btn btn-secondary" style="display: none;">
         ➕ Добавить этот УЦ в мой белый список
       </button>
@@ -168,7 +172,7 @@
     </details>
 
     <footer class="footer">
-      <span>CA Indicator v1.5.0</span>
+      <span>CA Indicator v1.6.0</span>
       <span>•</span>
       <span class="safe-note">Единственный запрос — обновление базы УЦ</span>
     </footer>
