@@ -256,8 +256,8 @@ const THEMES = {
     draw: c => c.drawQuestion()
   },
   insecure: {
-    base: [100, 116, 139],    // #64748b slate gray
-    border: [226, 232, 240],  // #e2e8f0
+    base: [220, 38, 38],      // #dc2626 — HTTP теперь тревожный, как и перехват
+    border: [254, 202, 202],  // #fecaca
     draw: c => c.drawSlash()
   },
   default: {

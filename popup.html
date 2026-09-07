@@ -93,6 +93,17 @@
       </div>
     </div>
 
+    <!-- Точная перепроверка цепочки по AIA -->
+    <div id="aia-section" class="details-section" style="display: none;">
+      <div class="section-title">Точная перепроверка цепочки</div>
+      <div id="aia-loader" class="aia-loader">
+        <span class="aia-spinner"></span>
+        <span>Достраиваю цепочку по AIA и проверяю подписи…</span>
+      </div>
+      <div id="aia-verdict" class="aia-verdict" style="display: none;"></div>
+      <ol id="aia-chain" class="aia-chain"></ol>
+    </div>
+
     <!-- Actions Area -->
     <div id="action-area" class="action-area">
       <button id="btn-whitelist" class="btn btn-secondary" style="display: none;">
@@ -157,7 +168,7 @@
     </details>
 
     <footer class="footer">
-      <span>CA Indicator v1.4.0</span>
+      <span>CA Indicator v1.5.0</span>
       <span>•</span>
       <span class="safe-note">Единственный запрос — обновление базы УЦ</span>
     </footer>

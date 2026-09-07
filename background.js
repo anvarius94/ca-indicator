@@ -102,7 +102,7 @@ function readTLV(b, pos) {
     }
     hdr = 2 + n;
   }
-  return { tag, contentStart: pos + hdr, end: pos + hdr + len };
+  return { tag, start: pos, contentStart: pos + hdr, end: pos + hdr + len };
 }
 
 function children(b, node) {
@@ -274,7 +274,7 @@ async function analyzeSecurityInfo(si, url) {
     return {
       level: 'insecure',
       badge: 'HTTP',
-      badgeColor: '#64748b',
+      badgeColor: '#dc2626',
       iconTheme: 'insecure',
       title: '🔓 Соединение не защищено (HTTP / Plaintext)',
       issuerName: 'Отсутствует (HTTP)',
@@ -290,7 +290,7 @@ async function analyzeSecurityInfo(si, url) {
     return {
       level: 'insecure',
       badge: 'HTTP',
-      badgeColor: '#64748b',
+      badgeColor: '#dc2626',
       iconTheme: 'insecure',
       title: '🔓 Соединение не защищено (HTTP / Plaintext)',
       issuerName: 'Отсутствует (HTTP)',
@@ -428,16 +428,16 @@ async function analyzeSecurityInfo(si, url) {
   }
 
   return {
-    level: 'danger',
-    badge: '!',
-    badgeColor: '#dc2626',
-    iconTheme: 'danger',
-    title: '🚨 Сертификат вне Certificate Transparency\nИздатель: ' + issuerName + '\nПодписан корнем, установленным локально!',
+    level: 'warning',
+    badge: '?',
+    badgeColor: '#d97706',
+    iconTheme: 'warning',
+    title: '⚠️ УЦ не подтверждён Certificate Transparency\nИздатель: ' + issuerName + '\nОткройте расширение для точной перепроверки цепочки',
     issuerName: issuerName,
     subjectName: subjectName,
     fingerprint: leaf.fingerprint,
     hasSct: false,
-    riskDescription: 'В сертификате нет подписей CT-логов. Публичные УЦ обязаны их проставлять, и получить их может только публично доверенный центр. Значит сертификат выпущен корнем, установленным на этом компьютере или в вашей сети: антивирус, корпоративный DPI или государственный перехват. Трафик расшифровывается третьей стороной.',
+    riskDescription: 'В сертификате нет подписей CT-логов. Публичные УЦ обязаны их проставлять, поэтому сертификат, скорее всего, выпущен корнем, установленным на этом компьютере или в сети: антивирус, корпоративный DPI или государственный перехват. Откройте расширение — оно достроит цепочку по AIA и проверит подписи.',
     certificates: parsedChain
   };
 }
@@ -511,6 +511,8 @@ function registerWebRequestListener() {
         }
 
         const analysis = await analyzeSecurityInfo(securityInfo, url);
+        const leafRaw = securityInfo?.certificates?.[0]?.rawDER;
+        if (leafRaw) analysis.leafDerB64 = bytesToB64(leafRaw);
 
         // Значок обновляем СРАЗУ, до записи в storage: ждать завершения
         // асинхронной записи здесь значило задерживать появление статуса.
@@ -675,6 +677,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'VERIFY_CHAIN_AIA') {
+    loadTabStatus(message.tabId).then(async status => {
+      if (!status || !status.leafDerB64) {
+        sendResponse({ success: false, error: 'Для этой вкладки нет сертификата' });
+        return;
+      }
+      try {
+        const result = await verifyChainViaAia(b64ToBytes(status.leafDerB64));
+        sendResponse({ success: true, ...result });
+      } catch (e) {
+        sendResponse({ success: false, error: e?.message || String(e) });
+      }
+    });
+    return true;
+  }
+
   if (message.type === 'UPDATE_ROOT_STORE_FROM_GOOGLE') {
     updateRootStoreFromGoogle().then(res => {
       sendResponse(res);
@@ -732,3 +750,380 @@ chrome.alarms.onAlarm.addListener(alarm => {
     .then(r => console.log('CA Indicator: база корней обновлена, записей:', r.count))
     .catch(e => console.warn('CA Indicator: обновление базы не удалось:', e?.message || e));
 });
+
+// ===== 9. Точная перепроверка цепочки по AIA (запускается из попапа) =====
+//
+// Chrome отдаёт только листовой сертификат, поэтому корень достаём сами:
+// в сертификате есть расширение Authority Information Access со ссылкой на
+// сертификат издателя. Идём по ссылкам вверх, на каждом шаге проверяя подпись
+// через WebCrypto, пока не упрёмся в корень из trusted_roots.json.
+//
+// Многие промежуточные УЦ (например GlobalSign) не публикуют AIA на корень.
+// Тогда корень ищется в базе по точному совпадению DER-байтов issuer/subject,
+// и подпись проверяется его открытым ключом.
+//
+// Запросы уходят ТОЛЬКО когда пользователь открыл попап.
+
+const AIA_OID = '1.3.6.1.5.5.7.1.1';
+const CA_ISSUERS_OID = '1.3.6.1.5.5.7.48.2';
+const PKCS7_SIGNED_DATA_OID = '1.2.840.113549.1.7.2';
+const AIA_MAX_DEPTH = 6;
+const AIA_TIMEOUT_MS = 6000;
+
+const RSA_SIG_ALGS = {
+  '1.2.840.113549.1.1.11': 'SHA-256',
+  '1.2.840.113549.1.1.12': 'SHA-384',
+  '1.2.840.113549.1.1.13': 'SHA-512'
+};
+const EC_SIG_ALGS = {
+  '1.2.840.10045.4.3.2': 'SHA-256',
+  '1.2.840.10045.4.3.3': 'SHA-384',
+  '1.2.840.10045.4.3.4': 'SHA-512'
+};
+const EC_CURVES = {
+  '1.2.840.10045.3.1.7': 'P-256',
+  '1.3.132.0.34': 'P-384',
+  '1.3.132.0.35': 'P-521'
+};
+
+function bytesToB64(buf) {
+  const a = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]);
+  return btoa(s);
+}
+
+function b64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// Сертификат — SEQUENCE, внутри которого первым лежит TBSCertificate, тоже
+// SEQUENCE. У PKCS#7 на этом месте OID, так что проверка отсеивает .p7c.
+function looksLikeCertificate(bytes) {
+  const b = new Uint8Array(bytes);
+  const root = readTLV(b, 0);
+  if (!root || root.tag !== 0x30) return false;
+  const tbs = children(b, root)[0];
+  return Boolean(tbs && tbs.tag === 0x30);
+}
+
+// Sectigo и ряд других УЦ отдают по ссылке AIA не голый сертификат, а
+// PKCS#7-контейнер. Достаём из него все вложенные сертификаты.
+function extractCertsFromPkcs7(bytes) {
+  try {
+    const b = new Uint8Array(bytes);
+    const root = readTLV(b, 0);
+    if (!root) return [];
+    const ch = children(b, root);
+    if (!ch.length || decodeOID(b, ch[0]) !== PKCS7_SIGNED_DATA_OID) return [];
+    if (!ch[1]) return [];
+    const signedData = readTLV(b, ch[1].contentStart);
+    if (!signedData) return [];
+    for (const node of children(b, signedData)) {
+      if (node.tag === 0xa0) {
+        return children(b, node)
+          .map(x => b.slice(x.start, x.end))
+          .filter(looksLikeCertificate);
+      }
+    }
+    return [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function getExtensionValueNode(b, tbsNode, oid) {
+  for (const ext of findExtensionNodes(b, tbsNode)) {
+    const ch = children(b, ext);
+    if (!ch.length) continue;
+    if (decodeOID(b, ch[0]) !== oid) continue;
+    return ch[ch.length - 1]; // extnValue: OCTET STRING
+  }
+  return null;
+}
+
+function getCaIssuerUrls(der) {
+  try {
+    const b = new Uint8Array(der);
+    const root = readTLV(b, 0);
+    if (!root) return [];
+    const tbs = children(b, root)[0];
+    if (!tbs) return [];
+    const val = getExtensionValueNode(b, tbs, AIA_OID);
+    if (!val) return [];
+
+    const seq = readTLV(b, val.contentStart);
+    if (!seq) return [];
+
+    const urls = [];
+    for (const ad of children(b, seq)) {
+      const ch = children(b, ad);
+      if (ch.length < 2) continue;
+      if (decodeOID(b, ch[0]) !== CA_ISSUERS_OID) continue;
+      // GeneralName uniformResourceIdentifier = контекстный тег [6]
+      if (ch[1].tag !== 0x86) continue;
+      urls.push(new TextDecoder().decode(b.slice(ch[1].contentStart, ch[1].end)));
+    }
+    return urls;
+  } catch (e) {
+    return [];
+  }
+}
+
+function getSignatureInfo(b, root) {
+  const parts = children(b, root);
+  const algSeq = parts[1];
+  const sigBits = parts[2];
+  if (!algSeq || !sigBits) return null;
+  const algNode = children(b, algSeq)[0];
+  if (!algNode) return null;
+  // BIT STRING: первый байт содержимого — число неиспользуемых бит
+  return {
+    algOid: decodeOID(b, algNode),
+    sig: b.slice(sigBits.contentStart + 1, sigBits.end)
+  };
+}
+
+function tbsParts(b, root) {
+  const tbs = children(b, root)[0];
+  if (!tbs) return null;
+  const parts = children(b, tbs);
+  const i = parts[0]?.tag === 0xa0 ? 1 : 0;
+  return { tbs, parts, i };
+}
+
+function getSpkiNode(b, root) {
+  const t = tbsParts(b, root);
+  return t ? (t.parts[t.i + 5] || null) : null;
+}
+
+// DER-байты Name целиком — используются как точный ключ сравнения issuer/subject
+function getIssuerDer(b, root) {
+  const t = tbsParts(b, root);
+  if (!t) return null;
+  const node = t.parts[t.i + 2];
+  return node ? b.slice(node.start, node.end) : null;
+}
+
+function getSubjectDer(b, root) {
+  const t = tbsParts(b, root);
+  if (!t) return null;
+  const node = t.parts[t.i + 4];
+  return node ? b.slice(node.start, node.end) : null;
+}
+
+function getEcCurve(b, spkiNode) {
+  const alg = children(b, spkiNode)[0];
+  if (!alg) return null;
+  const ch = children(b, alg);
+  if (ch.length < 2) return null;
+  return EC_CURVES[decodeOID(b, ch[1])] || null;
+}
+
+// X.509 хранит ECDSA-подпись как SEQUENCE { r, s }, WebCrypto ждёт r||s
+// фиксированной длины.
+function derEcdsaToRaw(sig, size) {
+  const s = readTLV(sig, 0);
+  if (!s) return null;
+  const parts = children(sig, s);
+  if (parts.length < 2) return null;
+  const out = new Uint8Array(size * 2);
+  for (let k = 0; k < 2; k++) {
+    let v = sig.slice(parts[k].contentStart, parts[k].end);
+    let i = 0;
+    while (i < v.length - 1 && v[i] === 0) i++;
+    v = v.slice(i);
+    if (v.length > size) return null;
+    out.set(v, k * size + size - v.length);
+  }
+  return out;
+}
+
+// true — подпись сходится, false — не сходится, null — не смогли проверить
+async function verifyChildAgainstSpki(childDer, spkiBytes) {
+  try {
+    const cb = new Uint8Array(childDer);
+    const croot = readTLV(cb, 0);
+    const ctbs = children(cb, croot)[0];
+    if (!ctbs) return null;
+    const tbsBytes = cb.slice(ctbs.start, ctbs.end);
+
+    const sigInfo = getSignatureInfo(cb, croot);
+    if (!sigInfo) return null;
+
+    const spki = new Uint8Array(spkiBytes);
+
+    if (RSA_SIG_ALGS[sigInfo.algOid]) {
+      const key = await crypto.subtle.importKey(
+        'spki', spki,
+        { name: 'RSASSA-PKCS1-v1_5', hash: { name: RSA_SIG_ALGS[sigInfo.algOid] } },
+        false, ['verify']
+      );
+      return await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, sigInfo.sig, tbsBytes);
+    }
+
+    if (EC_SIG_ALGS[sigInfo.algOid]) {
+      const spkiNode = readTLV(spki, 0);
+      if (!spkiNode) return null;
+      const curve = getEcCurve(spki, spkiNode);
+      if (!curve) return null;
+      const size = curve === 'P-256' ? 32 : curve === 'P-384' ? 48 : 66;
+      const raw = derEcdsaToRaw(sigInfo.sig, size);
+      if (!raw) return null;
+      const key = await crypto.subtle.importKey(
+        'spki', spki, { name: 'ECDSA', namedCurve: curve }, false, ['verify']
+      );
+      return await crypto.subtle.verify(
+        { name: 'ECDSA', hash: { name: EC_SIG_ALGS[sigInfo.algOid] } }, key, raw, tbsBytes
+      );
+    }
+
+    return null; // например RSASSA-PSS
+  } catch (e) {
+    return null;
+  }
+}
+
+async function verifyCertSignature(childDer, issuerDer) {
+  try {
+    const ib = new Uint8Array(issuerDer);
+    const iroot = readTLV(ib, 0);
+    const spkiNode = getSpkiNode(ib, iroot);
+    if (!spkiNode) return null;
+    return await verifyChildAgainstSpki(childDer, ib.slice(spkiNode.start, spkiNode.end));
+  } catch (e) {
+    return null;
+  }
+}
+
+// Корень, который подписал этот сертификат, ищем в базе по точному совпадению
+// DER-байтов issuer с subject корня, затем проверяем подпись его ключом.
+async function findIssuingRoot(certDer) {
+  try {
+    const b = new Uint8Array(certDer);
+    const root = readTLV(b, 0);
+    const issuerDer = getIssuerDer(b, root);
+    if (!issuerDer) return null;
+    const issuerB64 = bytesToB64(issuerDer);
+
+    for (const hash of Object.keys(trustedRootsMap)) {
+      const r = trustedRootsMap[hash];
+      if (!r || r.subject !== issuerB64 || !r.spki) continue;
+      const ok = await verifyChildAgainstSpki(certDer, b64ToBytes(r.spki));
+      if (ok === true) {
+        return { hash, name: r.name, source: r.source };
+      }
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+const aiaCache = new Map();
+
+async function fetchIssuerCerts(url) {
+  if (aiaCache.has(url)) return aiaCache.get(url);
+  let out = [];
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), AIA_TIMEOUT_MS);
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (res.ok) {
+      const buf = new Uint8Array(await res.arrayBuffer());
+      if (looksLikeCertificate(buf)) {
+        out = [buf];
+      } else if (buf[0] === 0x30) {
+        out = extractCertsFromPkcs7(buf);
+      } else {
+        const txt = new TextDecoder().decode(buf);
+        const matches = txt.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) || [];
+        out = matches
+          .map(m => b64ToBytes(m.replace(/-----[^\n]+-----/g, '').replace(/\s+/g, '')))
+          .filter(looksLikeCertificate);
+      }
+    }
+  } catch (e) {
+    out = [];
+  }
+  aiaCache.set(url, out);
+  return out;
+}
+
+async function verifyChainViaAia(leafDer) {
+  const chain = [];
+  let cur = leafDer;
+  let outcome = 'depth-exceeded';
+
+  for (let depth = 0; depth < AIA_MAX_DEPTH; depth++) {
+    const fp = await computeSha256(cur);
+    const parsed = parseCertificate(cur);
+    const known = trustedRootsMap[fp] || null;
+
+    const entry = {
+      subject: parsed ? formatName(parsed.subject) : '(не разобран)',
+      issuer: parsed ? formatName(parsed.issuer) : '',
+      fingerprint: fp,
+      knownRootName: known ? known.name : null,
+      knownRootSource: known ? known.source : null,
+      signatureVerified: null
+    };
+    chain.push(entry);
+
+    if (known) {
+      outcome = 'root-found';
+      break;
+    }
+
+    const urls = getCaIssuerUrls(cur);
+    let candidates = [];
+    for (const u of urls) {
+      candidates = await fetchIssuerCerts(u);
+      if (candidates.length) break;
+    }
+
+    // Издателя по сети получить не вышло — возможно, это последний промежуточный,
+    // а его корень уже лежит у нас в базе.
+    if (!candidates.length) {
+      const rootMatch = await findIssuingRoot(cur);
+      if (rootMatch) {
+        entry.signatureVerified = true;
+        chain.push({
+          subject: rootMatch.name,
+          issuer: rootMatch.name,
+          fingerprint: rootMatch.hash,
+          knownRootName: rootMatch.name,
+          knownRootSource: rootMatch.source,
+          signatureVerified: null
+        });
+        outcome = 'root-found';
+        break;
+      }
+      outcome = urls.length ? 'fetch-failed' : (depth === 0 ? 'no-aia-on-leaf' : 'no-aia');
+      break;
+    }
+
+    let chosen = null;
+    let verified = null;
+    for (const cand of candidates) {
+      const v = await verifyCertSignature(cur, cand);
+      if (v === true) { chosen = cand; verified = true; break; }
+      if (chosen === null) { chosen = cand; verified = v; }
+    }
+
+    entry.signatureVerified = verified;
+    cur = chosen;
+  }
+
+  const anyBroken = chain.some(c => c.signatureVerified === false);
+  return {
+    outcome,
+    chain,
+    anyBroken,
+    trusted: outcome === 'root-found' && !anyBroken
+  };
+}

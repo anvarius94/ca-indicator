@@ -18,6 +18,7 @@ node test_extension.js     # full test suite (see caveat below)
 #   after editing build_root_store.js, rerun it and re-check trusted_roots.json counts
 node build_root_store.js   # regenerate trusted_roots.json from Chrome Root Store + Mozilla NSS
 node generate_icons.js     # regenerate all 20 PNGs in icons/ (zero deps, hand-rolled PNG encoder)
+node test_aia_chain.js     # AIA chain building + signature verification (needs network)
 node bump_version.js 1.3.1  # bump the version in all three places it appears
 ```
 
@@ -69,10 +70,14 @@ The verdict now comes from one bit: does the leaf carry embedded SCTs — X.509 
 - SCTs present → `trusted`. CT logs only accept certificates from publicly trusted CAs, so a
   locally installed root cannot obtain them.
 - SCTs absent, issuer in `userWhitelist` → `trusted`. The legitimate no-CT case is a company's
-  internal CA, so the popup offers the whitelist button on `danger`.
-- SCTs absent → `danger`. Chrome only enforces CT for chains to *public* roots; chains to a locally
-  installed root are exempt, which is exactly the carve-out antivirus and DPI interception relies on.
+  internal CA, so the popup offers the whitelist button.
+- SCTs absent → `warning` (amber). Chrome only enforces CT for chains to *public* roots; chains to
+  a locally installed root are exempt, which is the carve-out antivirus and DPI rely on. This is
+  deliberately **not** red: the instant check is a suspicion, and the popup's AIA pass is what
+  settles it.
 - DER unparseable → `warning`. This level no longer means "unknown CA".
+- Plain HTTP → `insecure`, painted **red** (badge, icon, popup card, in-page banner). An
+  unencrypted page is treated as more urgent than a certificate that merely lacks CT.
 
 **The check is presence-only.** SCT signatures are not verified — that needs the CT logs' public
 keys and precert reconstruction. A forged certificate that copies an SCT extension verbatim would
@@ -80,6 +85,36 @@ pass. Closing that requires verifying the SCT signatures, not another list.
 
 `trustedRootsMap` and the weekly Google root-store update still exist and still cannot fire (leaf
 only, see above). They are kept for the day Chrome exposes the chain, not because they do work.
+
+### On-demand AIA verification
+
+Opening the popup fires `VERIFY_CHAIN_AIA`, and `verifyChainViaAia()` rebuilds the real chain the
+webRequest API refuses to hand over. Per hop: read the `caIssuers` URL out of the Authority
+Information Access extension, fetch the issuer, verify the child's signature against the issuer's
+public key with WebCrypto, repeat until a certificate's SHA-256 is a key in `trustedRootsMap`.
+
+This is the only part of the extension that touches the network on a per-site basis, and it runs
+**only** on popup open — never from the passive listener.
+
+Three cases cost real work to get right; do not "simplify" them away:
+
+- Some CAs (Sectigo) serve a **PKCS#7 container** at the AIA URL, not a bare certificate.
+  `extractCertsFromPkcs7()` handles it, and `fetchIssuerCerts()` returns a *list* of candidates
+  that the caller tries until one verifies.
+- Some intermediates (GlobalSign) publish **no AIA for their root**. `findIssuingRoot()` then
+  matches the certificate's issuer DN against root subject DNs by exact DER bytes and verifies the
+  signature with that root's public key — which is why `trusted_roots.json` now stores `subject`
+  and `spki` per root, and why it grew to ~124 KB.
+- `readTLV` returns `start` specifically so TBSCertificate and SubjectPublicKeyInfo can be sliced
+  **with their headers** — WebCrypto needs the exact DER, and a signature check silently fails
+  without it.
+
+RSASSA-PKCS1-v1_5 and ECDSA (P-256/384/521) are covered; RSASSA-PSS returns `null` (unverifiable,
+not "invalid"). `verifyChildAgainstSpki` returns **true / false / null** and the three are not
+interchangeable — `null` must never be reported to the user as a failed signature.
+
+`test_aia_chain.js` extracts these functions straight out of `background.js` and runs them against
+live sites, so it catches drift between the tested code and the shipped code.
 
 ### Versioning and git
 
@@ -128,14 +163,14 @@ enumerated, `securityInfo`/`securityInfoRawDer` exist only on `OnHeadersReceived
 contains no `certificateChain` option of any kind. The root genuinely cannot be reached this way —
 real chains run 3 to 5 certificates deep, and the extension receives element `[0]`.
 
-Two escape hatches exist, both rejected:
+Two escape hatches exist. One is rejected, one is implemented:
 
-- `chrome.debugger` + CDP gives `Network.getCertificate` (experimental, returns DER strings) and
+- `chrome.debugger` + CDP gives `Network.getCertificate` (experimental) and
   `Network.responseReceived`'s `securityDetails` with `signedCertificateTimestampList` and
-  `certificateTransparencyCompliance`. It also pins a "Chrome is being debugged by an extension"
-  infobar to every tab, which is incompatible with a passive indicator.
-- AIA chasing — fetching the issuer from the leaf's `caIssuers` URL — rebuilds the chain but needs a
-  network request per issuer and breaks the offline guarantee.
+  `certificateTransparencyCompliance`. **Rejected** — it pins a "Chrome is being debugged by an
+  extension" infobar to every tab, which is incompatible with a passive indicator.
+- **AIA chasing is implemented** — see the section below. It runs only when the user opens the
+  popup, so the passive path stays offline.
 
 Consequences to keep in mind: the loop over `si.certificates` always runs exactly once, and
 `trustedRootsMap[fp]` compares a **leaf** fingerprint against **root** hashes, so it never matches.

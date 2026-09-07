@@ -16,7 +16,7 @@ function readTLV(b, pos) {
     for (let i = 0; i < n; i++) len = len * 256 + (b[pos + 2 + i] || 0);
     hdr = 2 + n;
   }
-  return { tag, contentStart: pos + hdr, end: pos + hdr + len };
+  return { tag, start: pos, contentStart: pos + hdr, end: pos + hdr + len };
 }
 
 function children(b, node) {
@@ -77,7 +77,14 @@ function parseCertificate(rawDer) {
     const parts = children(b, tbs);
     const i = parts[0]?.tag === 0xa0 ? 1 : 0;
     const subjectNode = parts[i + 4];
-    return { subject: parseName(b, subjectNode) };
+    const spkiNode = parts[i + 5];
+    return {
+      subject: parseName(b, subjectNode),
+      // DER-байты Name и SubjectPublicKeyInfo целиком: по ним расширение
+      // находит корень для промежуточного без AIA и проверяет его подпись.
+      subjectDer: subjectNode ? Buffer.from(b.slice(subjectNode.start, subjectNode.end)).toString("base64") : "",
+      spki: spkiNode ? Buffer.from(b.slice(spkiNode.start, spkiNode.end)).toString("base64") : ""
+    };
   } catch (e) {
     return null;
   }
@@ -93,7 +100,7 @@ function parsePemCerts(pemStr, source) {
     const fp = sha256.match(/.{2}/g).join(':');
     const parsed = parseCertificate(der);
     const name = [parsed?.subject?.O, parsed?.subject?.CN].filter(Boolean).join(' / ') || 'Unknown Root';
-    list.push({ hash: fp, name, source });
+    list.push({ hash: fp, name, source, subjectDer: parsed?.subjectDer || '', spki: parsed?.spki || '' });
   }
   return list;
 }
@@ -124,7 +131,7 @@ https.get(googleUrl, { headers: { 'User-Agent': 'Node' } }, res => {
         const src = rootsMap[c.hash].source;
         if (!src.includes(c.source)) rootsMap[c.hash].source = src + ' + ' + c.source;
       } else {
-        rootsMap[c.hash] = { name: c.name, source: c.source };
+        rootsMap[c.hash] = { name: c.name, source: c.source, subject: c.subjectDer, spki: c.spki };
       }
     }
 
@@ -143,7 +150,7 @@ https.get(googleUrl, { headers: { 'User-Agent': 'Node' } }, res => {
   const mozillaCerts = parsePemCerts(tls.rootCertificates.join('\n'), 'Mozilla NSS');
   const rootsMap = {};
   for (const c of mozillaCerts) {
-    rootsMap[c.hash] = { name: c.name, source: c.source };
+    rootsMap[c.hash] = { name: c.name, source: c.source, subject: c.subjectDer, spki: c.spki };
   }
   const outPath = path.join(__dirname, 'trusted_roots.json');
   fs.writeFileSync(outPath, JSON.stringify({

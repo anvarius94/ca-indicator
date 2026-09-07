@@ -197,6 +197,18 @@
     return shadowRoot;
   }
 
+  // Плашка гаснет сама, чтобы не перекрывать страницу.
+  function scheduleFadeOut(pill, delay) {
+    setTimeout(() => {
+      if (currentBanner !== pill) return;
+      pill.classList.add('ca-fade-out');
+      setTimeout(() => {
+        if (pill.parentNode) pill.remove();
+        if (currentBanner === pill) currentBanner = null;
+      }, 350);
+    }, delay);
+  }
+
   function displayIndicator(status) {
     if (!status || !status.level) return;
     if (config.bannerMode === 'never') return;
@@ -216,19 +228,20 @@
 
     const issuer = status.issuerName || '(неизвестный УЦ)';
 
-    if (status.level === 'danger') {
-      // High-visibility top alert banner for MITM / State Interception
+    if (status.level === 'danger' || status.level === 'insecure') {
+      const isHttp = status.level === 'insecure';
       const banner = document.createElement('div');
       banner.className = 'ca-danger-banner';
       banner.innerHTML = `
         <div class="ca-danger-content">
-          <span class="ca-icon-pulse">🚨</span>
+          <span class="ca-icon-pulse">${isHttp ? '\u{1F513}' : '\u{1F6A8}'}</span>
           <div>
-            <div class="ca-text-title">Внимание: Обнаружен перехватчик трафика (MITM)</div>
-            <div class="ca-text-desc">
-              Выдан: <span class="ca-badge-ca-name">${escapeHtml(issuer)}</span> — без подписей Certificate Transparency.
-              Такой сертификат выпущен локально установленным корнем: ваш трафик (пароли, cookies) расшифровывается третьей стороной!
-            </div>
+            <div class="ca-text-title">${isHttp
+              ? 'Внимание: страница передаётся без шифрования'
+              : 'Внимание: ошибка сертификата'}</div>
+            <div class="ca-text-desc">${isHttp
+              ? 'Соединение по HTTP. Пароли, cookies и содержимое страницы идут открытым текстом — любой посредник в сети может их прочитать и подменить.'
+              : 'Издатель: <span class="ca-badge-ca-name">' + escapeHtml(issuer) + '</span>. ' + escapeHtml(status.riskDescription || '')}</div>
           </div>
         </div>
         <button class="ca-close-btn" title="Скрыть предупреждение">✕</button>
@@ -260,6 +273,9 @@
 
       sr.appendChild(pill);
       currentBanner = pill;
+
+      // Держим дольше зелёной: предупреждение важнее, но всё равно не навсегда.
+      scheduleFadeOut(pill, 8000);
     } else if (status.level === 'trusted') {
       // Discreet pill for Trusted CA that slides in and fades out
       const pill = document.createElement('div');

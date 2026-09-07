@@ -22,6 +22,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const elRootCount = document.getElementById('rootstore-count');
   const elRootDate = document.getElementById('rootstore-date');
   const btnUpdateRoots = document.getElementById('btn-update-roots');
+  const elAiaSection = document.getElementById('aia-section');
+  const elAiaLoader = document.getElementById('aia-loader');
+  const elAiaVerdict = document.getElementById('aia-verdict');
+  const elAiaChain = document.getElementById('aia-chain');
 
   let currentTabStatus = null;
   let currentWhitelist = [];
@@ -150,7 +154,67 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     currentTabStatus = response.status;
     renderStatus(currentTabStatus);
+
+    // Сетевые запросы уходят только теперь, когда пользователь открыл попап.
+    if (currentTabStatus.leafDerB64) startAiaVerification(activeTab.id);
   });
+
+  const AIA_OUTCOMES = {
+    'no-aia-on-leaf': ['bad', 'У сертификата нет ссылки на издателя (AIA). Публичные УЦ её всегда указывают — почти наверняка сертификат выпущен корнем, установленным локально.'],
+    'no-aia': ['unknown', 'Промежуточный УЦ не публикует ссылку на свой корень, и подходящего корня нет в базе. Цепочку до конца достроить не удалось.'],
+    'fetch-failed': ['unknown', 'Сертификат издателя не удалось скачать: нет сети или сервер УЦ недоступен.'],
+    'not-a-certificate': ['unknown', 'По ссылке издателя пришёл не сертификат.'],
+    'depth-exceeded': ['unknown', 'Цепочка оказалась длиннее допустимой глубины.']
+  };
+
+  function startAiaVerification(tabId) {
+    elAiaSection.style.display = 'block';
+    elAiaLoader.style.display = 'flex';
+    elAiaVerdict.style.display = 'none';
+    elAiaChain.innerHTML = '';
+
+    chrome.runtime.sendMessage({ type: 'VERIFY_CHAIN_AIA', tabId }, res => {
+      elAiaLoader.style.display = 'none';
+      elAiaVerdict.style.display = 'block';
+
+      if (chrome.runtime.lastError || !res || !res.success) {
+        elAiaVerdict.className = 'aia-verdict unknown';
+        elAiaVerdict.textContent = 'Перепроверка не выполнена: ' +
+          ((res && res.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'нет ответа');
+        return;
+      }
+
+      const root = res.chain.find(c => c.knownRootName);
+      if (res.trusted && root) {
+        elAiaVerdict.className = 'aia-verdict ok';
+        elAiaVerdict.textContent = 'Цепочка достроена до корня «' + root.knownRootName +
+          '» из базы (' + (root.knownRootSource || 'корневое хранилище') +
+          '). Все подписи в цепочке проверены криптографически.';
+      } else if (res.anyBroken) {
+        elAiaVerdict.className = 'aia-verdict bad';
+        elAiaVerdict.textContent = 'Подпись в цепочке не сходится: сертификат подписан не тем ключом, который заявлен. Это прямой признак подмены.';
+      } else {
+        const [cls, text] = AIA_OUTCOMES[res.outcome] || ['unknown', 'Результат неизвестен.'];
+        elAiaVerdict.className = 'aia-verdict ' + cls;
+        elAiaVerdict.textContent = text;
+      }
+
+      res.chain.forEach(c => {
+        const li = document.createElement('li');
+        const mark = document.createElement('span');
+        mark.className = 'aia-mark';
+        mark.textContent = c.signatureVerified === true ? '\u2713'
+          : c.signatureVerified === false ? '\u2715'
+          : c.knownRootName ? '\u2691' : '\u00b7';
+        const name = document.createElement('span');
+        name.className = 'aia-name' + (c.knownRootName ? ' aia-root' : '');
+        name.textContent = c.subject + (c.knownRootName ? ' — корень из базы' : '');
+        li.appendChild(mark);
+        li.appendChild(name);
+        elAiaChain.appendChild(li);
+      });
+    });
+  }
 
   function renderRootStoreInfo(info) {
     if (elRootCount) elRootCount.textContent = info.count ?? '—';
