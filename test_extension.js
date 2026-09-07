@@ -100,6 +100,32 @@ function parseName(b, nameNode) {
   return res;
 }
 
+// OID 1.3.6.1.4.1.11129.2.4.2 — встроенные Signed Certificate Timestamps.
+// Публичный УЦ обязан их проставить, а получить их можно только от CT-логов,
+// которые принимают сертификаты исключительно от публично доверенных центров.
+// Локально установленный корень (антивирус, DPI, госперехват) их поставить не может.
+const SCT_EXTENSION_OID = '1.3.6.1.4.1.11129.2.4.2';
+
+// extensions лежат в TBSCertificate под контекстным тегом [3] (0xA3),
+// внутри — SEQUENCE OF Extension, каждый Extension начинается с OID.
+function findExtensionNodes(b, tbsNode) {
+  for (const c of children(b, tbsNode)) {
+    if (c.tag === 0xa3) {
+      const seq = children(b, c)[0];
+      return seq ? children(b, seq) : [];
+    }
+  }
+  return [];
+}
+
+function hasExtension(b, tbsNode, oid) {
+  for (const ext of findExtensionNodes(b, tbsNode)) {
+    const idNode = children(b, ext)[0];
+    if (idNode && decodeOID(b, idNode) === oid) return true;
+  }
+  return false;
+}
+
 function parseCertificate(rawDer) {
   const b = new Uint8Array(rawDer);
   const rootTLV = readTLV(b, 0);
@@ -121,7 +147,8 @@ function parseCertificate(rawDer) {
   return {
     issuer: parseName(b, issuerNode),
     subject: parseName(b, subjectNode),
-    serial: serialHex
+    serial: serialHex,
+    hasSct: hasExtension(b, tbs, SCT_EXTENSION_OID)
   };
 }
 
@@ -140,11 +167,12 @@ for (const item of testDomains) {
     const parsed = parseCertificate(peerCert.raw);
     assert.ok(parsed, `Failed to parse DER for ${item.host}`);
     const name = [parsed.issuer.O, parsed.issuer.CN].filter(Boolean).join(' / ');
-    console.log(`✔ ${item.host} -> Issuer: "${name}", Subject: "${parsed.subject.CN}"`);
+    assert.strictEqual(parsed.hasSct, true, `У ${item.host} нет SCT — публичный сертификат обязан их иметь`);
+    console.log(`✔ ${item.host} -> Issuer: "${name}", SCT: есть`);
     socket.end();
     completed++;
     if (completed === testDomains.length) {
-      testSimulatedCerts();
+      testRootCertsHaveNoSct();
     }
   });
   socket.on('error', err => {
@@ -152,40 +180,23 @@ for (const item of testDomains) {
   });
 }
 
-function testSimulatedCerts() {
-  console.log('=== TEST 4: Classification of Interception vs Trusted signatures ===');
+function testRootCertsHaveNoSct() {
+  console.log('=== TEST 4: Корневые УЦ не должны содержать SCT ===');
 
-  const GLOBAL_TRUSTED = [
-    "Internet Security Research Group", "ISRG", "Let's Encrypt",
-    "Google Trust Services", "GTS", "DigiCert", "Sectigo", "USERTrust", "GlobalSign"
-  ];
-
-  const KNOWN_INTERCEPTION = [
-    "Russian Trusted", "Минцифры", "Qaznet", "Kaspersky", "mitmproxy", "Fortinet", "Zscaler"
-  ];
-
-  function evaluate(issuerStr) {
-    const n = issuerStr.toLowerCase();
-    if (KNOWN_INTERCEPTION.some(k => n.includes(k.toLowerCase()))) return 'danger';
-    if (GLOBAL_TRUSTED.some(k => n.includes(k.toLowerCase()))) return 'trusted';
-    return 'warning';
+  // Негативный контроль классификации. Корневые сертификаты выпускаются вне
+  // Certificate Transparency, поэтому SCT в них нет — ровно как у сертификата,
+  // сгенерированного локальным перехватчиком.
+  let checked = 0;
+  for (const pem of tls.rootCertificates.slice(0, 25)) {
+    const der = Buffer.from(pem.replace(/-----[^\n]+-----/g, '').replace(/\s+/g, ''), 'base64');
+    const parsed = parseCertificate(der);
+    assert.ok(parsed, 'Не удалось разобрать корневой сертификат');
+    assert.strictEqual(parsed.hasSct, false,
+      'У корневого "' + (parsed.subject.CN || parsed.subject.O) + '" неожиданно найден SCT');
+    checked++;
   }
+  console.log('✔ ' + checked + ' корневых УЦ: SCT отсутствует, как и ожидалось');
 
-  assert.strictEqual(evaluate('The Ministry of Digital Development and Communications / Russian Trusted Sub CA'), 'danger');
-  assert.strictEqual(evaluate('Qaznet Trust Network / STS'), 'danger');
-  assert.strictEqual(evaluate('AO Kaspersky Lab / Kaspersky Anti-Virus Personal Root'), 'danger');
-  assert.strictEqual(evaluate('mitmproxy / mitmproxy'), 'danger');
-  assert.strictEqual(evaluate('Fortinet / FortiGate Inspection'), 'danger');
-
-  assert.strictEqual(evaluate('Google Trust Services LLC / WR2'), 'trusted');
-  assert.strictEqual(evaluate("Let's Encrypt / YE2"), 'trusted');
-  assert.strictEqual(evaluate("Internet Security Research Group / ISRG Root X1"), 'trusted');
-  assert.strictEqual(evaluate('DigiCert Inc / DigiCert Global G2'), 'trusted');
-  assert.strictEqual(evaluate('Sectigo Limited / Sectigo Public Server'), 'trusted');
-
-  assert.strictEqual(evaluate('Internal Corp CA / Root 1'), 'warning');
-  assert.strictEqual(evaluate('Some Random Hacker / CA'), 'warning');
-
-  console.log('✔ All classification scenarios (danger, trusted, warning) verified successfully!');
+  console.log('✔ Классификация: SCT есть -> публичный УЦ, SCT нет -> локальный корень (перехват)');
   console.log('\n=== ALL TESTS PASSED! ===');
 }

@@ -3,58 +3,10 @@
 
 // ===== 1. Списки доверенных и подозрительных центров =====
 
-// Общепризнанные мировые центры сертификации (Mozilla Root Store, Chrome Root Store, Apple, Microsoft)
-const GLOBAL_TRUSTED = [
-  "Internet Security Research Group", "ISRG", "Let's Encrypt",
-  "Google Trust Services", "Google Trust Services LLC", "GTS", "WR", "WE",
-  "DigiCert", "Baltimore", "Cybertrust", "Encryption Everywhere",
-  "Sectigo", "The USERTRUST Network", "USERTrust", "Comodo",
-  "GoGetSSL", "GoGetSSL RSA DV CA", "GoGetSSL ECC DV CA",
-  "PositiveSSL", "InstantSSL", "cPanel", "cPanel, Inc.",
-  "GlobalSign", "GlobalSign nv-sa", "GlobalSign Root CA", "AlphaSSL",
-  "Amazon", "Amazon Trust Services", "Starfield", "GoDaddy",
-  "Cloudflare", "Cloudflare, Inc.",
-  "Microsoft Corporation", "Microsoft", "Apple", "Apple Inc.",
-  "IdenTrust", "Buypass", "Actalis", "SSL.com", "ZeroSSL",
-  "Certum", "Asseco", "HARICA", "QuoVadis", "SwissSign",
-  "T-Systems", "TeleSec", "D-TRUST", "Telia", "DFN",
-  "Thawte", "GeoTrust", "RapidSSL",
-  "SecureTrust", "Trustwave", "WISeKey", "SECOM",
-  "Firmaprofesional", "Izenpe", "Camerfirma", "AC Camerfirma",
-  "Microsec", "Netlock", "InfoNotary", "Disig", "e-Szigno", "Chunghwa Telecom",
-  "Network Solutions", "Entrust", "AffirmTrust"
-];
-
-// Сигнатуры известных центров перехвата, государственных УЦ, антивирусных MITM-фильтров и локальных прокси
-const KNOWN_INTERCEPTION = [
-  // Государственные УЦ (РФ, РК, РБ, УЗ)
-  "Russian Trusted", "Russian Trusted Root CA", "Russian Trusted Sub CA",
-  "Ministry of Digital Development", "Минцифры", "Министерство цифрового развития",
-  "Госуслуги", "Gosuslugi", "НИИ Восход", "Сбер", "Sberbank", "Sberbank CA", "ВТБ", "VTB",
-  "Qaznet", "Qaznet Trust Network", "State Technical Service", "STS.KZ",
-  "Национальный удостоверяющий центр РК", "НУЦ РК",
-  "UZINFOCOM", "O'zbekiston", "Uzbekistan", "Kryptobel", "GosSUOK", "ГосСУОК",
-
-  // Антивирусные SSL/TLS инспекторы (локальный перехват на ПК)
-  "Kaspersky", "AO Kaspersky Lab", "Kaspersky Anti-Virus",
-  "ESET", "ESET SSL Filter", "ESET, spol. s r.o.",
-  "Avast", "Avast Web/Mail Shield", "AVG", "AVG Web/Mail Shield",
-  "Bitdefender", "Bitdefender Personal CA",
-  "Dr.Web", "Doctor Web", "Doctor Web Ltd",
-  "Sophos", "Sophos SSL CA",
-  "AdGuard", "AdGuard Personal Root Certificate",
-
-  // Корпоративные DPI и шлюзы перехвата
-  "Fortinet", "FortiGate", "Zscaler", "Zscaler Root CA", "Netskope",
-  "Palo Alto", "Palo Alto Networks", "PAN-OS",
-  "Check Point", "Blue Coat", "Symantec Web", "Symantec Web Security",
-  "Cisco Umbrella", "Cisco IronPort", "IronPort", "Forcepoint",
-  "SonicWall", "WatchGuard", "Barracuda",
-
-  // Инструменты отладки и аудита (MITM)
-  "mitmproxy", "Charles Proxy", "Charles", "Fiddler", "DO_NOT_TRUST_FiddlerRoot",
-  "PortSwigger", "Burp Suite", "Burp", "Proxyman", "Whistle"
-];
+// Списков имён УЦ здесь больше нет. Они были принципиально ненадёжны: вердикт
+// выносился сравнением подстрок в имени издателя, поэтому любой УЦ вне списка
+// объявлялся подозрительным, а короткие сигнатуры вроде "WE" совпадали случайно.
+// Классификация теперь строится на Certificate Transparency, см. analyzeSecurityInfo.
 
 // In-memory кэш статуса для вкладок
 const tabStatusMap = new Map();
@@ -206,6 +158,32 @@ function parseName(b, nameNode) {
   return res;
 }
 
+// OID 1.3.6.1.4.1.11129.2.4.2 — встроенные Signed Certificate Timestamps.
+// Публичный УЦ обязан их проставить, а получить их можно только от CT-логов,
+// которые принимают сертификаты исключительно от публично доверенных центров.
+// Локально установленный корень (антивирус, DPI, госперехват) их поставить не может.
+const SCT_EXTENSION_OID = '1.3.6.1.4.1.11129.2.4.2';
+
+// extensions лежат в TBSCertificate под контекстным тегом [3] (0xA3),
+// внутри — SEQUENCE OF Extension, каждый Extension начинается с OID.
+function findExtensionNodes(b, tbsNode) {
+  for (const c of children(b, tbsNode)) {
+    if (c.tag === 0xa3) {
+      const seq = children(b, c)[0];
+      return seq ? children(b, seq) : [];
+    }
+  }
+  return [];
+}
+
+function hasExtension(b, tbsNode, oid) {
+  for (const ext of findExtensionNodes(b, tbsNode)) {
+    const idNode = children(b, ext)[0];
+    if (idNode && decodeOID(b, idNode) === oid) return true;
+  }
+  return false;
+}
+
 function parseCertificate(rawDer) {
   try {
     const b = new Uint8Array(rawDer);
@@ -233,7 +211,8 @@ function parseCertificate(rawDer) {
     return {
       issuer: parseName(b, issuerNode),
       subject: parseName(b, subjectNode),
-      serial: serialHex
+      serial: serialHex,
+      hasSct: hasExtension(b, tbs, SCT_EXTENSION_OID)
     };
   } catch (e) {
     console.error('Error parsing X.509 DER:', e);
@@ -354,10 +333,8 @@ async function analyzeSecurityInfo(si, url) {
   }
 
   const parsedChain = [];
-  let isDanger = false;
-  let dangerName = '';
-  let isTrusted = false;
-  let trustedName = '';
+  let sctFound = false;
+  let parseFailed = false;
   let verifiedByHash = false;
   let matchedHashRoot = null;
 
@@ -373,93 +350,94 @@ async function analyzeSecurityInfo(si, url) {
       }
     }
 
-    const issuerStr = parsed ? formatName(parsed.issuer) : '';
-    const subjectStr = parsed ? formatName(parsed.subject) : '';
+    if (!parsed) parseFailed = true;
+    if (parsed?.hasSct) sctFound = true;
 
-    // 1. Проверка по криптографическому SHA-256 хэшу (Chrome Root Store / Mozilla)
+    // Сверка с Chrome Root Store остаётся, но сработать может только если Chrome
+    // однажды начнёт отдавать цепочку: сейчас приходит один лист, а в базе корни.
     if (fp && trustedRootsMap[fp]) {
       verifiedByHash = true;
       matchedHashRoot = trustedRootsMap[fp];
-      isTrusted = true;
-      if (!trustedName) trustedName = matchedHashRoot.name;
     }
 
     parsedChain.push({
       issuer: parsed?.issuer || {},
       subject: parsed?.subject || {},
-      issuerStr,
-      subjectStr,
+      issuerStr: parsed ? formatName(parsed.issuer) : '',
+      subjectStr: parsed ? formatName(parsed.subject) : '',
       serial: parsed?.serial || '',
       fingerprint: fp,
+      hasSct: Boolean(parsed?.hasSct),
       verifiedByHash: Boolean(fp && trustedRootsMap[fp])
     });
-
-    // 2. Проверяем на известные перехватчики (любой сертификат в цепочке)
-    // ТОЛЬКО издатель. Subject — это сам сайт: у support.kaspersky.ru в поле O
-    // стоит "AO Kaspersky Lab", и проверка subject помечала совершенно
-    // легитимный сайт как перехват. Перехватчика выдаёт лишь то, кто ПОДПИСАЛ.
-    if (checkMatch(issuerStr, KNOWN_INTERCEPTION)) {
-      isDanger = true;
-      dangerName = issuerStr;
-    }
-
-    // 3. Проверяем издателя по общепризнанным УЦ или пользовательскому списку.
-    // Subject здесь тоже не участвует по той же причине.
-    if (checkMatch(issuerStr, GLOBAL_TRUSTED) || checkMatch(issuerStr, userWhitelist)) {
-      isTrusted = true;
-      if (!trustedName) trustedName = issuerStr;
-    }
   }
 
-  const leaf = parsedChain[0] || { issuerStr: '(неизвестно)', subjectStr: '' };
-  const primaryName = leaf.issuerStr || trustedName || '(без имени)';
+  const leaf = parsedChain[0] || { issuerStr: '', subjectStr: '', fingerprint: '' };
+  const issuerName = leaf.issuerStr || '(без имени)';
+  const subjectName = leaf.subjectStr || hostname;
 
-  if (isDanger) {
+  // Разобрать DER не удалось — судить не о чем, молчим вместо догадок.
+  if (parseFailed) {
     return {
-      level: 'danger',
-      badge: '!',
-      badgeColor: '#dc2626',
-      iconTheme: 'danger',
-      title: `🚨 ВНИМАНИЕ: Обнаружен перехватчик трафика!\nУЦ: ${dangerName || primaryName}\nВаш зашифрованный трафик расшифровывается третьей стороной!`,
-      issuerName: dangerName || primaryName,
-      subjectName: leaf.subjectStr || (url ? new URL(url).hostname : ''),
+      level: 'warning',
+      badge: '?',
+      badgeColor: '#d97706',
+      iconTheme: 'warning',
+      title: '⚠️ Не удалось разобрать сертификат',
+      issuerName: issuerName,
+      subjectName: subjectName,
       fingerprint: leaf.fingerprint,
-      verifiedByHash: false,
-      riskDescription: 'Сертификат выдан известным центром перехвата, государственным УЦ или локальным фильтром. Весь ваш трафик (пароли, cookies, переписка) расшифровывается!',
+      riskDescription: 'Браузер передал сертификат, но его структуру не удалось разобрать. Проверка Certificate Transparency не выполнена.',
       certificates: parsedChain
     };
   }
 
-  if (isTrusted) {
+  if (sctFound) {
     return {
       level: 'trusted',
       badge: 'OK',
       badgeColor: '#16a34a',
       iconTheme: 'trusted',
-      title: `🛡️ Общепризнанный доверенный УЦ\nИздатель: ${primaryName}\n${verifiedByHash ? '✓ Хэш подтвержден в Google Chrome Root Store' : 'Сертификат входит в глобальные хранилища'}`,
-      issuerName: primaryName,
-      subjectName: leaf.subjectStr || (url ? new URL(url).hostname : ''),
+      title: '🛡️ Сертификат публичного УЦ\nИздатель: ' + issuerName + '\n✓ Есть подписи Certificate Transparency',
+      issuerName: issuerName,
+      subjectName: subjectName,
       fingerprint: leaf.fingerprint,
       verifiedByHash: verifiedByHash,
       matchedRoot: matchedHashRoot,
-      riskDescription: verifiedByHash
-        ? 'Сертификат подтвержден официальным криптографическим отпечатком (SHA-256) в Chrome Root Store / Mozilla NSS. Подделка имени исключена.'
-        : 'Сертификат выдан общепризнанным глобальным удостоверяющим центром. Подделка и перехват через локальные государственные сертификаты исключены.',
+      hasSct: true,
+      riskDescription: 'В сертификате есть подписи CT-логов (SCT). Их выдают только публично доверенным удостоверяющим центрам, поэтому локально установленный корень — антивирус, корпоративный DPI, государственный УЦ — такой сертификат подделать не может.',
       certificates: parsedChain
     };
   }
 
-  // Не попал ни в опасные, ни в доверенные
+  // Издателя добавил сам пользователь — например, корпоративный внутренний УЦ.
+  if (checkMatch(leaf.issuerStr, userWhitelist)) {
+    return {
+      level: 'trusted',
+      badge: 'OK',
+      badgeColor: '#16a34a',
+      iconTheme: 'trusted',
+      title: '🛡️ УЦ из вашего белого списка\nИздатель: ' + issuerName,
+      issuerName: issuerName,
+      subjectName: subjectName,
+      fingerprint: leaf.fingerprint,
+      hasSct: false,
+      riskDescription: 'Подписей Certificate Transparency нет, но этот издатель добавлен вами в белый список вручную.',
+      certificates: parsedChain
+    };
+  }
+
   return {
-    level: 'warning',
-    badge: '?',
-    badgeColor: '#d97706',
-    iconTheme: 'warning',
-    title: `⚠️ Неизвестный УЦ\nИздатель: ${primaryName}\nУЦ отсутствует в списке общепризнанных мировых центров`,
-    issuerName: primaryName,
-    subjectName: leaf.subjectStr || (url ? new URL(url).hostname : ''),
+    level: 'danger',
+    badge: '!',
+    badgeColor: '#dc2626',
+    iconTheme: 'danger',
+    title: '🚨 Сертификат вне Certificate Transparency\nИздатель: ' + issuerName + '\nПодписан корнем, установленным локально!',
+    issuerName: issuerName,
+    subjectName: subjectName,
     fingerprint: leaf.fingerprint,
-    riskDescription: 'Сертификат подписан неизвестным или частным центром сертификации. Если это не локальная сеть компании, трафик может прослушиваться!',
+    hasSct: false,
+    riskDescription: 'В сертификате нет подписей CT-логов. Публичные УЦ обязаны их проставлять, и получить их может только публично доверенный центр. Значит сертификат выпущен корнем, установленным на этом компьютере или в вашей сети: антивирус, корпоративный DPI или государственный перехват. Трафик расшифровывается третьей стороной.',
     certificates: parsedChain
   };
 }

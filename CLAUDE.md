@@ -56,21 +56,30 @@ or renaming a level means touching all of them:
 A new `iconTheme` also needs a matching entry in the `THEMES` map in
 [generate_icons.js](generate_icons.js) and a rerun of that script, or `setIcon` silently fails.
 
-### Classification precedence
+### Classification is Certificate Transparency, not name lists
 
-Matching runs against the **issuer DN only**. The subject is the site itself, so matching it was a
-false-positive generator: `support.kaspersky.ru` carries `O=AO Kaspersky Lab` in its *subject* and
-was reported as intercepted traffic. Only who *signed* the certificate can indicate interception,
-and by the same logic only the issuer can make it trusted.
+`GLOBAL_TRUSTED` and `KNOWN_INTERCEPTION` are **gone**. They decided verdicts by substring-matching
+the issuer DN, which meant any CA absent from the hardcoded 72 names was reported as suspicious, and
+two-letter signatures like `"WE"` matched by accident. Do not reintroduce a name list.
 
-1. SHA-256 fingerprint looked up in `trustedRootsMap` → sets `isTrusted` and `verifiedByHash`
-   (never fires in practice — see the leaf-only section).
-2. Case-insensitive **substring** match of the issuer against `KNOWN_INTERCEPTION` → `isDanger`.
-3. Substring match of the issuer against `GLOBAL_TRUSTED` or the user's whitelist → `isTrusted`.
+The verdict now comes from one bit: does the leaf carry embedded SCTs — X.509 extension OID
+`1.3.6.1.4.1.11129.2.4.2`? `hasExtension()` walks the TBSCertificate's `[3]` context tag
+(`0xA3`) → `SEQUENCE OF Extension` → each extension's leading OID.
 
-`isDanger` is checked before `isTrusted` at the return, so danger wins. Both lists are matched with
-`String.includes`, so short entries (`"GTS"`, `"WE"`, `"Burp"`) match aggressively anywhere in the
-name — check for collisions before adding a short signature.
+- SCTs present → `trusted`. CT logs only accept certificates from publicly trusted CAs, so a
+  locally installed root cannot obtain them.
+- SCTs absent, issuer in `userWhitelist` → `trusted`. The legitimate no-CT case is a company's
+  internal CA, so the popup offers the whitelist button on `danger`.
+- SCTs absent → `danger`. Chrome only enforces CT for chains to *public* roots; chains to a locally
+  installed root are exempt, which is exactly the carve-out antivirus and DPI interception relies on.
+- DER unparseable → `warning`. This level no longer means "unknown CA".
+
+**The check is presence-only.** SCT signatures are not verified — that needs the CT logs' public
+keys and precert reconstruction. A forged certificate that copies an SCT extension verbatim would
+pass. Closing that requires verifying the SCT signatures, not another list.
+
+`trustedRootsMap` and the weekly Google root-store update still exist and still cannot fire (leaf
+only, see above). They are kept for the day Chrome exposes the chain, not because they do work.
 
 ### Versioning and git
 
@@ -114,15 +123,22 @@ This is the single most important constraint in the codebase. In
 `leaf_cert` and does `certificates.Append(std::move(leaf_cert))` — the array **always has exactly
 one element**, the server certificate. No intermediates, no root.
 
-Consequences, all of which look like bugs if you don't know this:
+Verified exhaustively: every `extraInfoSpec` enum in `extensions/common/api/web_request.json` was
+enumerated, `securityInfo`/`securityInfoRawDer` exist only on `OnHeadersReceived`, and the schema
+contains no `certificateChain` option of any kind. The root genuinely cannot be reached this way —
+real chains run 3 to 5 certificates deep, and the extension receives element `[0]`.
 
-- The `for` loop over `si.certificates` in `analyzeSecurityInfo` always runs exactly once.
-- `trustedRootsMap[fp]` compares a **leaf** fingerprint against **root** hashes, so it can never
-  match on a real site. `verifiedByHash` is therefore always false in practice, and the
-  `badge-hash-verified` element it drives never appears. The root store is kept current for the day
-  Chrome exposes the chain; it does no work today.
-- Interception detection rests entirely on the issuer DN parsed out of the leaf's DER. That works
-  (a MITM proxy's leaf carries its own issuer name) but is a name check, not a cryptographic one.
+Two escape hatches exist, both rejected:
+
+- `chrome.debugger` + CDP gives `Network.getCertificate` (experimental, returns DER strings) and
+  `Network.responseReceived`'s `securityDetails` with `signedCertificateTimestampList` and
+  `certificateTransparencyCompliance`. It also pins a "Chrome is being debugged by an extension"
+  infobar to every tab, which is incompatible with a passive indicator.
+- AIA chasing — fetching the issuer from the leaf's `caIssuers` URL — rebuilds the chain but needs a
+  network request per issuer and breaks the offline guarantee.
+
+Consequences to keep in mind: the loop over `si.certificates` always runs exactly once, and
+`trustedRootsMap[fp]` compares a **leaf** fingerprint against **root** hashes, so it never matches.
 
 ### State and messaging
 
@@ -166,7 +182,7 @@ those two counters:
 
 These exist in the source and are not wired up — do not assume they work:
 
-- `badge-hash-verified` is wired but cannot fire — see the leaf-only section above.
+- `badge-hash-verified` now reflects `hasSct`, not the root-store hash.
 - The `GET_TAB_STATUS` response still carries `isSecurityInfoSupported` and `securityInfoError`
   that the popup does not surface anywhere.
 - `content.js` never receives a `flag_required` push, so a page whose flag is off shows no in-page

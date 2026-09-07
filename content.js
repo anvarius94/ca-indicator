@@ -226,8 +226,8 @@
           <div>
             <div class="ca-text-title">Внимание: Обнаружен перехватчик трафика (MITM)</div>
             <div class="ca-text-desc">
-              Сертификат выдан: <span class="ca-badge-ca-name">${escapeHtml(issuer)}</span>. 
-              Ваш зашифрованный трафик (пароли, cookies) может перехватываться и читаться третьей стороной!
+              Выдан: <span class="ca-badge-ca-name">${escapeHtml(issuer)}</span> — без подписей Certificate Transparency.
+              Такой сертификат выпущен локально установленным корнем: ваш трафик (пароли, cookies) расшифровывается третьей стороной!
             </div>
           </div>
         </div>
@@ -248,7 +248,7 @@
       pill.className = `ca-floating-pill ca-pill-warning ${posClass}`;
       pill.innerHTML = `
         <span>⚠️</span>
-        <span>Неизвестный УЦ: <strong>${escapeHtml(issuer)}</strong></span>
+        <span>Сертификат не разобран: <strong>${escapeHtml(issuer)}</strong></span>
         <button class="ca-close-btn" title="Закрыть">✕</button>
       `;
 

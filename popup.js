@@ -166,7 +166,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function renderStatus(status) {
     elStatusCard.className = `status-card status-${status.level || 'warning'}`;
-    if (elHashBadge) elHashBadge.style.display = status.verifiedByHash ? 'block' : 'none';
+    if (elHashBadge) elHashBadge.style.display = status.hasSct ? 'block' : 'none';
     if (btnReload) btnReload.style.display = 'none';
     elIssuer.textContent = status.issuerName || '(неизвестно)';
     elSubject.textContent = status.subjectName || elSiteDomain.textContent;
@@ -182,23 +182,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else if (status.level === 'danger') {
       if (elFlagAlert) elFlagAlert.style.display = 'none';
       elStatusIcon.textContent = '🚨';
-      elLevelBadge.textContent = 'ОБНАРУЖЕН ПЕРЕХВАТ';
-      elHeadline.textContent = 'Трафик может расшифровываться!';
-      elDesc.textContent = status.riskDescription || 'Сертификат выдан известным центром перехвата или государственным УЦ.';
-      btnWhitelist.style.display = 'none';
+      elLevelBadge.textContent = 'ВНЕ CERTIFICATE TRANSPARENCY';
+      elHeadline.textContent = 'Трафик расшифровывается!';
+      elDesc.textContent = status.riskDescription || 'В сертификате нет подписей CT-логов: он выпущен локально установленным корнем.';
+      // Единственный законный случай без CT — внутренний УЦ компании.
+      btnWhitelist.style.display = 'block';
     } else if (status.level === 'trusted') {
       if (elFlagAlert) elFlagAlert.style.display = 'none';
       elStatusIcon.textContent = '🛡️';
-      elLevelBadge.textContent = 'ОБЩЕПРИЗНАННЫЙ УЦ';
+      elLevelBadge.textContent = 'ПУБЛИЧНЫЙ УЦ · CT';
       elHeadline.textContent = 'Соединение доверенное';
-      elDesc.textContent = status.riskDescription || 'Сертификат выдан мировым удостоверяющим центром из официальных хранилищ.';
+      elDesc.textContent = status.riskDescription || 'В сертификате есть подписи Certificate Transparency.';
       btnWhitelist.style.display = 'none';
     } else if (status.level === 'warning') {
       elStatusIcon.textContent = '⚠️';
-      elLevelBadge.textContent = 'НЕИЗВЕСТНЫЙ УЦ';
-      elHeadline.textContent = 'Подозрительный сертификат';
-      elDesc.textContent = status.riskDescription || 'УЦ отсутствует в списке общепризнанных доверенных центров.';
-      btnWhitelist.style.display = 'block';
+      elLevelBadge.textContent = 'СЕРТИФИКАТ НЕ РАЗОБРАН';
+      elHeadline.textContent = 'Проверка не выполнена';
+      elDesc.textContent = status.riskDescription || 'Структуру сертификата не удалось разобрать, проверка Certificate Transparency не проводилась.';
+      btnWhitelist.style.display = 'none';
     } else if (status.level === 'insecure') {
       if (elFlagAlert) elFlagAlert.style.display = 'none';
       elStatusIcon.textContent = '🔓';
