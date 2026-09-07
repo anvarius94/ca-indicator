@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "CA Indicator v1.2.1 - Проверка УЦ и Детектор Перехвата",
-  "version": "1.2.1",
+  "name": "CA Indicator v1.3.0 - Проверка УЦ и Детектор Перехвата",
+  "version": "1.3.0",
   "description": "Мгновенно подсвечивает доверие корневого УЦ без кликов и выявляет перехват трафика (Минцифры, Qaznet, антивирусы, MITM-прокси).",
   "minimum_chrome_version": "144",
   "permissions": [
     "webRequest",
     "storage",
-    "activeTab"
+    "activeTab",
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -33,9 +34,15 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_idle"
     }
   ]

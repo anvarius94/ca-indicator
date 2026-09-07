@@ -59,6 +59,36 @@ const KNOWN_INTERCEPTION = [
 // In-memory кэш статуса для вкладок
 const tabStatusMap = new Map();
 
+// Service worker в MV3 засыпает примерно через 30 секунд простоя, и Map очищается.
+// Дублируем статус в storage.session, иначе popup видит пустоту и ошибочно
+// показывает «включите флаг» на полностью рабочей конфигурации.
+async function saveTabStatus(tabId, data) {
+  tabStatusMap.set(tabId, data);
+  try {
+    await chrome.storage.session.set({ ['tab_' + tabId]: data });
+  } catch (e) { /* storage.session недоступен */ }
+}
+
+async function loadTabStatus(tabId) {
+  if (tabStatusMap.has(tabId)) return tabStatusMap.get(tabId);
+  try {
+    const key = 'tab_' + tabId;
+    const res = await chrome.storage.session.get([key]);
+    if (res && res[key]) {
+      tabStatusMap.set(tabId, res[key]);
+      return res[key];
+    }
+  } catch (e) { /* ignore */ }
+  return null;
+}
+
+// Сколько https-ответов увидел «зондовый» слушатель. Если их уже несколько,
+// а securityInfo не пришёл ни разу — фича в браузере действительно выключена.
+let httpsResponsesSeen = 0;
+
+// Сколько раз securityInfo реально доехал с момента запуска воркера.
+let securityInfoDeliveries = 0;
+
 // Пользовательский белый список УЦ
 let userWhitelist = [];
 
@@ -78,16 +108,17 @@ async function initRootStore() {
     if (res.flagConfirmed) {
       flagConfirmed = true;
     }
+    // Встроенная база читается всегда, скачанная накладывается сверху:
+    // обновление из сети ДОПОЛНЯЕТ комплектные корни, а не заменяет их.
+    const resp = await fetch(chrome.runtime.getURL('trusted_roots.json'));
+    const data = await resp.json();
+    if (data && data.roots) {
+      trustedRootsMap = { ...data.roots };
+      if (data.updatedAt) rootStoreUpdatedAt = data.updatedAt;
+    }
     if (res.customRoots && Object.keys(res.customRoots).length > 0) {
-      trustedRootsMap = res.customRoots;
+      trustedRootsMap = { ...trustedRootsMap, ...res.customRoots };
       if (res.rootStoreUpdatedAt) rootStoreUpdatedAt = res.rootStoreUpdatedAt;
-    } else {
-      const resp = await fetch(chrome.runtime.getURL('trusted_roots.json'));
-      const data = await resp.json();
-      if (data && data.roots) {
-        trustedRootsMap = data.roots;
-        if (data.updatedAt) rootStoreUpdatedAt = data.updatedAt;
-      }
     }
   } catch (e) {
     console.error('Error loading trusted roots in worker:', e);
@@ -99,7 +130,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') {
     if (changes.userWhitelist) userWhitelist = changes.userWhitelist.newValue || [];
     if (changes.flagConfirmed) flagConfirmed = changes.flagConfirmed.newValue || false;
-    if (changes.customRoots) trustedRootsMap = changes.customRoots.newValue || {};
+    if (changes.customRoots) initRootStore();
     if (changes.rootStoreUpdatedAt) rootStoreUpdatedAt = changes.rootStoreUpdatedAt.newValue || '';
   }
 });
@@ -235,7 +266,32 @@ function checkMatch(name, list) {
 }
 
 async function analyzeSecurityInfo(si, url) {
-  if (!si || si.state !== 'secure') {
+  let isHttps = false;
+  let hostname = '';
+  try {
+    const u = new URL(url);
+    isHttps = u.protocol === 'https:' || u.protocol === 'wss:';
+    hostname = u.hostname;
+  } catch (e) { /* about:blank и прочее */ }
+
+  // Браузер вообще не передал securityInfo. Это НЕ признак HTTP:
+  // на https это значит, что флаг выключен или API недоступен.
+  if (!si) {
+    if (isHttps) {
+      return {
+        level: 'flag_required',
+        badge: 'FLAG',
+        badgeColor: '#eab308',
+        iconTheme: 'warning',
+        title: '⚠️ Нет доступа к сертификату.\nВключите chrome://flags/#web-request-security-info и перезапустите Chrome.',
+        issuerName: 'Данные сертификата недоступны',
+        subjectName: hostname,
+        fingerprint: '',
+        flagRequired: true,
+        riskDescription: 'Chrome не передал расширению данные сертификата. Проверьте, что флаг chrome://flags/#web-request-security-info включён и браузер был полностью перезапущен.',
+        certificates: []
+      };
+    }
     return {
       level: 'insecure',
       badge: 'HTTP',
@@ -243,9 +299,40 @@ async function analyzeSecurityInfo(si, url) {
       iconTheme: 'insecure',
       title: '🔓 Соединение не защищено (HTTP / Plaintext)',
       issuerName: 'Отсутствует (HTTP)',
-      subjectName: url ? new URL(url).hostname : '',
+      subjectName: hostname,
       fingerprint: '',
       riskDescription: 'Трафик передается в открытом виде без шифрования TLS. Данные могут перехватываться любым участником сети.',
+      certificates: []
+    };
+  }
+
+  // state === 'insecure' от самого Chrome — это действительно простой HTTP
+  if (si.state === 'insecure') {
+    return {
+      level: 'insecure',
+      badge: 'HTTP',
+      badgeColor: '#64748b',
+      iconTheme: 'insecure',
+      title: '🔓 Соединение не защищено (HTTP / Plaintext)',
+      issuerName: 'Отсутствует (HTTP)',
+      subjectName: hostname,
+      fingerprint: '',
+      riskDescription: 'Трафик передается в открытом виде без шифрования TLS. Данные могут перехватываться любым участником сети.',
+      certificates: []
+    };
+  }
+
+  if (si.state === 'broken') {
+    return {
+      level: 'danger',
+      badge: '!',
+      badgeColor: '#dc2626',
+      iconTheme: 'danger',
+      title: '🚨 Ошибка сертификата: TLS-соединение скомпрометировано',
+      issuerName: 'Недействительный сертификат',
+      subjectName: hostname,
+      fingerprint: '',
+      riskDescription: 'Chrome отметил соединение как broken: сертификат просрочен, отозван, самоподписан или не соответствует домену.',
       certificates: []
     };
   }
@@ -308,20 +395,19 @@ async function analyzeSecurityInfo(si, url) {
     });
 
     // 2. Проверяем на известные перехватчики (любой сертификат в цепочке)
-    if (checkMatch(issuerStr, KNOWN_INTERCEPTION) || checkMatch(subjectStr, KNOWN_INTERCEPTION)) {
+    // ТОЛЬКО издатель. Subject — это сам сайт: у support.kaspersky.ru в поле O
+    // стоит "AO Kaspersky Lab", и проверка subject помечала совершенно
+    // легитимный сайт как перехват. Перехватчика выдаёт лишь то, кто ПОДПИСАЛ.
+    if (checkMatch(issuerStr, KNOWN_INTERCEPTION)) {
       isDanger = true;
-      dangerName = checkMatch(issuerStr, KNOWN_INTERCEPTION) ? issuerStr : subjectStr;
+      dangerName = issuerStr;
     }
 
-    // 3. Проверяем по имени на общепризнанные УЦ или пользовательский белый список
-    if (
-      checkMatch(issuerStr, GLOBAL_TRUSTED) ||
-      checkMatch(subjectStr, GLOBAL_TRUSTED) ||
-      checkMatch(issuerStr, userWhitelist) ||
-      checkMatch(subjectStr, userWhitelist)
-    ) {
+    // 3. Проверяем издателя по общепризнанным УЦ или пользовательскому списку.
+    // Subject здесь тоже не участвует по той же причине.
+    if (checkMatch(issuerStr, GLOBAL_TRUSTED) || checkMatch(issuerStr, userWhitelist)) {
       isTrusted = true;
-      if (!trustedName) trustedName = issuerStr || subjectStr;
+      if (!trustedName) trustedName = issuerStr;
     }
   }
 
@@ -416,6 +502,11 @@ let securityInfoError = null;
 chrome.webRequest.onBeforeRequest.addListener(
   details => {
     if (details.tabId >= 0 && details.type === 'main_frame') {
+      // Навигация началась — прошлый статус этой вкладки больше не действителен.
+      // Без этого popup показывал бы данные предыдущего сайта на новом домене.
+      tabStatusMap.delete(details.tabId);
+      chrome.storage.session.remove('tab_' + details.tabId).catch(() => {});
+
       // Предварительное состояние загрузки
       chrome.action.setBadgeText({ tabId: details.tabId, text: '...' });
       chrome.action.setBadgeBackgroundColor({ tabId: details.tabId, color: '#64748b' });
@@ -434,6 +525,7 @@ function registerWebRequestListener() {
 
         // Если Chrome передал securityInfo - флаг 100% включен!
         if (securityInfo && securityInfo.state) {
+          securityInfoDeliveries++;
           if (!flagConfirmed) {
             flagConfirmed = true;
             chrome.storage.local.set({ flagConfirmed: true });
@@ -441,10 +533,12 @@ function registerWebRequestListener() {
         }
 
         const analysis = await analyzeSecurityInfo(securityInfo, url);
-        tabStatusMap.set(tabId, { ...analysis, url, timestamp: Date.now() });
 
-        // Обновляем значок и бейдж
+        // Значок обновляем СРАЗУ, до записи в storage: ждать завершения
+        // асинхронной записи здесь значило задерживать появление статуса.
+        tabStatusMap.set(tabId, { ...analysis, url, timestamp: Date.now() });
         updateBrowserAction(tabId, analysis);
+        saveTabStatus(tabId, { ...analysis, url, timestamp: Date.now() });
 
         // Уведомляем контентный скрипт вкладки
         chrome.tabs.sendMessage(tabId, {
@@ -457,39 +551,67 @@ function registerWebRequestListener() {
     );
     isSecurityInfoSupported = true;
   } catch (err) {
+    // Синхронное исключение бывает только на Chrome < 144, где схема API
+    // вообще не знает значений securityInfo.
     isSecurityInfoSupported = false;
     securityInfoError = err?.message || String(err);
-    console.warn('CA Indicator: SecurityInfo not permitted by browser without flag:', securityInfoError);
-
-    // Регистрируем fallback слушатель без securityInfo, чтобы воркер не падал
-    try {
-      chrome.webRequest.onHeadersReceived.addListener(
-        details => {
-          const { tabId, url } = details;
-          if (tabId < 0 || details.type !== 'main_frame') return;
-
-          const flagNotice = {
-            level: 'flag_required',
-            badge: 'FLAG',
-            badgeColor: '#eab308',
-            iconTheme: 'warning',
-            title: '⚠️ Требуется включить флаг в Chrome:\nchrome://flags/#web-request-security-info',
-            issuerName: 'Флаг не включен в браузере',
-            subjectName: url ? new URL(url).hostname : '',
-            fingerprint: '',
-            riskDescription: 'В браузере Chrome доступ к данным сертификатов требует включения флага: chrome://flags/#web-request-security-info',
-            flagRequired: true
-          };
-
-          tabStatusMap.set(tabId, { ...flagNotice, url, timestamp: Date.now() });
-          updateBrowserAction(tabId, flagNotice);
-        },
-        { urls: ['<all_urls>'], types: ['main_frame'] }
-      );
-    } catch (fallbackErr) {
-      console.error('Fallback listener error:', fallbackErr);
-    }
+    console.warn('CA Indicator: securityInfo extraInfoSpec отвергнут браузером:', securityInfoError);
   }
+
+  // Зондовый слушатель: регистрируется ВСЕГДА и без extraInfoSpec.
+  // Он нужен потому, что при выключенной фиче Chromium не бросает исключение,
+  // а лишь пишет ошибку в консоль и молча не регистрирует слушатель
+  // (web_request_api.cc: AddMessageToConsoleForListener + return).
+  // Значит try/catch выше сам по себе выключенный флаг обнаружить не может.
+  chrome.webRequest.onHeadersReceived.addListener(
+    details => {
+      const { tabId, url } = details;
+      if (tabId < 0 || details.type !== 'main_frame') return;
+
+      let hostname = '';
+      try {
+        const u = new URL(url);
+        if (u.protocol !== 'https:') return;
+        hostname = u.hostname;
+      } catch (e) {
+        return;
+      }
+
+      httpsResponsesSeen++;
+
+      // Самовосстановление: отметка о рабочем флаге стоит, но с момента запуска
+      // воркера securityInfo не пришёл ни разу за несколько https-ответов —
+      // значит флаг выключили. Иначе предупреждение уже никогда не вернулось бы.
+      if (flagConfirmed && securityInfoDeliveries === 0 && httpsResponsesSeen >= 3) {
+        flagConfirmed = false;
+        chrome.storage.local.set({ flagConfirmed: false });
+      }
+
+      // securityInfo уже приходил — основной слушатель жив, не мешаем ему.
+      if (flagConfirmed) return;
+
+      // Не поднимаем тревогу на самом первом ответе: слушатели одного события
+      // вызываются по порядку регистрации, дадим основному шанс отработать.
+      if (httpsResponsesSeen < 2) return;
+
+      const flagNotice = {
+        level: 'flag_required',
+        badge: 'FLAG',
+        badgeColor: '#eab308',
+        iconTheme: 'warning',
+        title: '⚠️ Требуется включить флаг в Chrome:\nchrome://flags/#web-request-security-info',
+        issuerName: 'Флаг не включен в браузере',
+        subjectName: hostname,
+        fingerprint: '',
+        riskDescription: 'Chrome не передаёт расширению данные сертификата. Включите chrome://flags/#web-request-security-info и полностью перезапустите браузер.',
+        flagRequired: true
+      };
+
+      saveTabStatus(tabId, { ...flagNotice, url, timestamp: Date.now() });
+      updateBrowserAction(tabId, flagNotice);
+    },
+    { urls: ['<all_urls>'], types: ['main_frame'] }
+  );
 }
 
 registerWebRequestListener();
@@ -497,6 +619,7 @@ registerWebRequestListener();
 // Очистка памяти при закрытии вкладки
 chrome.tabs.onRemoved.addListener(tabId => {
   tabStatusMap.delete(tabId);
+  chrome.storage.session.remove('tab_' + tabId).catch(() => {});
 });
 
 // ===== 6. Функция обновления базы из официального Chrome Root Store =====
@@ -514,6 +637,7 @@ async function updateRootStoreFromGoogle() {
   const pem = new TextDecoder().decode(bytes);
   const matches = pem.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) || [];
   let newRoots = 0;
+  const downloaded = {};
 
   for (const m of matches) {
     const b64 = m.replace(/-----[^\n]+-----/g, '').replace(/\s+/g, '');
@@ -529,13 +653,14 @@ async function updateRootStoreFromGoogle() {
 
     const parsed = parseCertificate(der);
     const name = [parsed?.subject?.O, parsed?.subject?.CN].filter(Boolean).join(' / ') || 'Google Root';
-    trustedRootsMap[hashHex] = { name, source: 'Google Chrome Root Store (Online)' };
+    downloaded[hashHex] = { name, source: 'Google Chrome Root Store (Online)' };
     newRoots++;
   }
 
+  trustedRootsMap = { ...trustedRootsMap, ...downloaded };
   rootStoreUpdatedAt = new Date().toISOString();
   await chrome.storage.local.set({
-    customRoots: trustedRootsMap,
+    customRoots: downloaded,
     rootStoreUpdatedAt
   });
 
@@ -552,17 +677,22 @@ async function updateRootStoreFromGoogle() {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_TAB_STATUS') {
     const tabId = message.tabId || sender?.tab?.id;
-    let status = tabStatusMap.get(tabId) || null;
-    sendResponse({
-      status,
-      userWhitelist,
-      flagConfirmed,
-      isSecurityInfoSupported,
-      securityInfoError,
-      rootStoreInfo: {
-        count: Object.keys(trustedRootsMap).length,
-        updatedAt: rootStoreUpdatedAt
-      }
+    loadTabStatus(tabId).then(status => {
+      sendResponse({
+        status,
+        userWhitelist,
+        flagConfirmed,
+        // Флаг считается выключенным ТОЛЬКО если браузер уже отдавал https-ответы,
+        // а securityInfo не пришёл ни разу. Пустой кэш статуса (уснувший service
+        // worker) больше не трактуется как отсутствие флага.
+        flagMissing: !flagConfirmed && (httpsResponsesSeen >= 2 || !isSecurityInfoSupported),
+        isSecurityInfoSupported,
+        securityInfoError,
+        rootStoreInfo: {
+          count: Object.keys(trustedRootsMap).length,
+          updatedAt: rootStoreUpdatedAt
+        }
+      });
     });
     return true;
   }
@@ -597,4 +727,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
+});
+
+// ===== 8. Автообновление базы корневых УЦ из официального Chrome Root Store =====
+
+const ROOT_STORE_ALARM = 'ca-indicator-root-store-update';
+const ROOT_STORE_PERIOD_MINUTES = 60 * 24 * 7; // раз в неделю
+
+function ensureRootStoreAlarm() {
+  chrome.alarms.get(ROOT_STORE_ALARM, alarm => {
+    if (!alarm) {
+      chrome.alarms.create(ROOT_STORE_ALARM, {
+        delayInMinutes: 1,
+        periodInMinutes: ROOT_STORE_PERIOD_MINUTES
+      });
+    }
+  });
+}
+
+chrome.runtime.onInstalled.addListener(ensureRootStoreAlarm);
+chrome.runtime.onStartup.addListener(ensureRootStoreAlarm);
+
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name !== ROOT_STORE_ALARM) return;
+  updateRootStoreFromGoogle()
+    .then(r => console.log('CA Indicator: база корней обновлена, записей:', r.count))
+    .catch(e => console.warn('CA Indicator: обновление базы не удалось:', e?.message || e));
 });

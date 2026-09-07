@@ -548,3 +548,10 @@ code {
 .safe-note {
   color: #38bdf8;
 }
+
+/* Блок состояния базы корневых УЦ в настройках */
+.rootstore-info {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 4px 0 8px;
+}

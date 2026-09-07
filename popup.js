@@ -15,6 +15,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const selectBannerMode = document.getElementById('select-banner-mode');
   const selectBannerPos = document.getElementById('select-banner-pos');
   const elWhitelistItems = document.getElementById('whitelist-items');
+  const elFlagAlert = document.getElementById('flag-alert');
+  const btnCopyFlag = document.getElementById('btn-copy-flag');
+  const btnReload = document.getElementById('btn-reload-page');
+  const elHashBadge = document.getElementById('badge-hash-verified');
+  const elRootCount = document.getElementById('rootstore-count');
+  const elRootDate = document.getElementById('rootstore-date');
+  const btnUpdateRoots = document.getElementById('btn-update-roots');
 
   let currentTabStatus = null;
   let currentWhitelist = [];
@@ -45,6 +52,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
+  // Домены, на которых Chrome вообще не пускает расширения: webRequest там
+  // не срабатывает никогда, поэтому статуса быть не может в принципе.
+  function isRestrictedUrl(urlObj) {
+    if (urlObj.hostname === 'chromewebstore.google.com') return true;
+    if (urlObj.hostname === 'chrome.google.com' && urlObj.pathname.startsWith('/webstore')) return true;
+    return false;
+  }
+
+  function sameOrigin(a, b) {
+    try {
+      return new URL(a).origin === new URL(b).origin;
+    } catch (e) {
+      return false;
+    }
+  }
+
   try {
     const urlObj = new URL(activeTab.url);
     elSiteDomain.textContent = urlObj.hostname || activeTab.url;
@@ -53,12 +76,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       renderInternalPage(urlObj.hostname);
       return;
     }
+
+    if (isRestrictedUrl(urlObj)) {
+      renderRestrictedPage(urlObj.hostname);
+      return;
+    }
   } catch (e) {
     elSiteDomain.textContent = activeTab.url || 'Неизвестно';
   }
-
-  const elFlagAlert = document.getElementById('flag-alert');
-  const btnCopyFlag = document.getElementById('btn-copy-flag');
 
   const btnOpenFlags = document.getElementById('btn-open-flags');
   if (btnOpenFlags) {
@@ -95,31 +120,54 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Request status from background worker
+  // Запрос статуса у фонового воркера
   chrome.runtime.sendMessage({ type: 'GET_TAB_STATUS', tabId: activeTab.id }, response => {
-    if (chrome.runtime.lastError || !response || !response.status) {
-      // If webRequest hasn't fired yet or tab reloaded
-      renderFallback(activeTab.url);
+    if (chrome.runtime.lastError || !response) {
+      renderFallback(activeTab.url, false);
       return;
     }
 
-    // If we have verified status with valid cert data
-    if (response?.status && (response.status.level === 'trusted' || response.status.level === 'danger')) {
-      if (elFlagAlert) elFlagAlert.style.display = 'none';
-    } else {
-      if (elFlagAlert) elFlagAlert.style.display = 'flex';
-    }
+    // Баннер про флаг показывается ТОЛЬКО если фон уже видел https-ответы,
+    // но securityInfo не пришёл ни разу. Пустой кэш статуса (уснувший service
+    // worker) больше не считается признаком выключенного флага.
+    const flagMissing = Boolean(response.flagMissing);
+    if (elFlagAlert) elFlagAlert.style.display = flagMissing ? 'flex' : 'none';
 
-    currentTabStatus = response?.status || null;
-    if (response?.userWhitelist) {
+    if (response.rootStoreInfo) renderRootStoreInfo(response.rootStoreInfo);
+
+    if (response.userWhitelist) {
       currentWhitelist = response.userWhitelist;
       renderWhitelist(currentWhitelist);
     }
-    renderStatus(currentTabStatus || { level: 'flag_required' });
+
+    // Статус обязан относиться к ТОМУ ЖЕ происхождению, что открыто во вкладке.
+    // На заблокированных для расширений доменах webRequest не срабатывает,
+    // и без этой проверки popup показывал бы сертификат предыдущего сайта.
+    if (!response.status || !sameOrigin(response.status.url, activeTab.url)) {
+      renderFallback(activeTab.url, flagMissing);
+      return;
+    }
+
+    currentTabStatus = response.status;
+    renderStatus(currentTabStatus);
   });
+
+  function renderRootStoreInfo(info) {
+    if (elRootCount) elRootCount.textContent = info.count ?? '—';
+    if (elRootDate) {
+      let d = '—';
+      if (info.updatedAt) {
+        const parsed = new Date(info.updatedAt);
+        d = isNaN(parsed) ? String(info.updatedAt) : parsed.toLocaleDateString();
+      }
+      elRootDate.textContent = d;
+    }
+  }
 
   function renderStatus(status) {
     elStatusCard.className = `status-card status-${status.level || 'warning'}`;
+    if (elHashBadge) elHashBadge.style.display = status.verifiedByHash ? 'block' : 'none';
+    if (btnReload) btnReload.style.display = 'none';
     elIssuer.textContent = status.issuerName || '(неизвестно)';
     elSubject.textContent = status.subjectName || elSiteDomain.textContent;
     elFingerprint.textContent = status.fingerprint || 'Не вычислен';
@@ -161,6 +209,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  function renderRestrictedPage(name) {
+    if (elFlagAlert) elFlagAlert.style.display = 'none';
+    if (btnReload) btnReload.style.display = 'none';
+    elStatusCard.className = 'status-card status-loading';
+    elStatusIcon.textContent = '🚫';
+    elLevelBadge.textContent = 'ДОСТУП ЗАКРЫТ БРАУЗЕРОМ';
+    elHeadline.textContent = 'Chrome не пускает сюда расширения';
+    elDesc.textContent = 'На доменах Chrome Web Store браузер блокирует работу расширений, поэтому прочитать сертификат этой страницы невозможно. Это ограничение Chrome, а не признак угрозы.';
+    elIssuer.textContent = 'Недоступно';
+    elSubject.textContent = name;
+    elFingerprint.textContent = '—';
+  }
+
   function renderInternalPage(name) {
     if (elFlagAlert) elFlagAlert.style.display = 'none';
     elStatusCard.className = 'status-card status-trusted';
@@ -173,9 +234,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     elFingerprint.textContent = '—';
   }
 
-  function renderFallback(url) {
+  function renderFallback(url, flagMissing) {
+    if (btnReload) btnReload.style.display = 'none';
+
     if (url && url.startsWith('http://')) {
-      if (elFlagAlert) elFlagAlert.style.display = 'none';
       renderStatus({
         level: 'insecure',
         issuerName: 'Отсутствует (HTTP)',
@@ -183,16 +245,38 @@ document.addEventListener('DOMContentLoaded', async () => {
         fingerprint: '—',
         riskDescription: 'Страница загружена по незащищенному протоколу HTTP.'
       });
-    } else {
-      // Show flag alert prominently!
+      return;
+    }
+
+    if (flagMissing) {
       if (elFlagAlert) elFlagAlert.style.display = 'flex';
       elStatusCard.className = 'status-card status-warning';
       elStatusIcon.textContent = '⚙️';
       elLevelBadge.textContent = 'ТРЕБУЕТСЯ НАСТРОЙКА CHROME';
       elHeadline.textContent = 'Включите флаг WebRequestSecurityInfo';
-      elDesc.textContent = 'Chrome блокирует чтение сертификатов без флага. Скопируйте ссылку выше, переключите в Enabled и перезагрузите браузер.';
+      elDesc.textContent = 'Chrome блокирует чтение сертификатов без флага. Скопируйте ссылку выше, переключите в Enabled и полностью перезапустите браузер.';
       elIssuer.textContent = 'Ожидание флага…';
       elSubject.textContent = elSiteDomain.textContent;
+      return;
+    }
+
+    // Данных по вкладке просто нет: страница была открыта раньше, чем расширение
+    // начало слушать запросы (установка или перезагрузка расширения).
+    elStatusCard.className = 'status-card status-loading';
+    elStatusIcon.textContent = '🔄';
+    elLevelBadge.textContent = 'НЕТ ДАННЫХ';
+    elHeadline.textContent = 'Обновите страницу';
+    elDesc.textContent = 'Сертификат считывается в момент загрузки страницы. Эта вкладка была открыта раньше, чем расширение начало слушать запросы.';
+    elIssuer.textContent = '—';
+    elSubject.textContent = elSiteDomain.textContent;
+    elFingerprint.textContent = '—';
+
+    if (btnReload) {
+      btnReload.style.display = 'block';
+      btnReload.onclick = () => {
+        chrome.tabs.reload(activeTab.id);
+        window.close();
+      };
     }
   }
 
@@ -258,6 +342,25 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
       li.appendChild(btnDel);
       elWhitelistItems.appendChild(li);
+    });
+  }
+
+  // Ручное обновление базы корневых УЦ из Chrome Root Store
+  if (btnUpdateRoots) {
+    btnUpdateRoots.addEventListener('click', () => {
+      const orig = btnUpdateRoots.textContent;
+      btnUpdateRoots.disabled = true;
+      btnUpdateRoots.textContent = '⏳ Скачиваю…';
+      chrome.runtime.sendMessage({ type: 'UPDATE_ROOT_STORE_FROM_GOOGLE' }, res => {
+        btnUpdateRoots.disabled = false;
+        if (res && res.success) {
+          btnUpdateRoots.textContent = '✓ Загружено ' + res.updatedCount + ', всего ' + res.count;
+          renderRootStoreInfo({ count: res.count, updatedAt: res.updatedAt });
+        } else {
+          btnUpdateRoots.textContent = '✕ Ошибка: ' + ((res && res.error) || 'нет сети');
+        }
+        setTimeout(() => { btnUpdateRoots.textContent = orig; }, 4000);
+      });
     });
   }
 });

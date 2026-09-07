@@ -115,12 +115,17 @@ https.get(googleUrl, { headers: { 'User-Agent': 'Node' } }, res => {
     const mozillaCerts = parsePemCerts(tls.rootCertificates.join('\n'), 'Mozilla NSS');
     console.log(`Parsed ${mozillaCerts.length} certificates from Mozilla.`);
 
+    // Mozilla идёт первой, Google — второй. При совпадении хэша источники
+    // объединяются: раньше NSS-записи затирали все роуты Chrome Root Store,
+    // и в базе не оставалось ни одной пометки Google.
     const rootsMap = {};
-    for (const c of [...googleCerts, ...mozillaCerts]) {
-      rootsMap[c.hash] = {
-        name: c.name,
-        source: c.source
-      };
+    for (const c of [...mozillaCerts, ...googleCerts]) {
+      if (rootsMap[c.hash]) {
+        const src = rootsMap[c.hash].source;
+        if (!src.includes(c.source)) rootsMap[c.hash].source = src + ' + ' + c.source;
+      } else {
+        rootsMap[c.hash] = { name: c.name, source: c.source };
+      }
     }
 
     const outPath = path.join(__dirname, 'trusted_roots.json');
