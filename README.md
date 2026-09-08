@@ -187,7 +187,7 @@ PKCS#7 вместо голого сертификата (Sectigo) и проме�
   Chrome Root Store.
 
 Ни телеметрии, ни аналитики, ни проверок репутации. Ни один адрес посещённой страницы никуда не
-уходит.
+уходит. Подробности — в [политике приватности](PRIVACY.md).
 
 ---
 
@@ -238,6 +238,7 @@ node test_aia_chain.js     # достройка цепочки и проверк
 node build_root_store.js   # пересобрать trusted_roots.json
 node generate_icons.js     # перерисовать иконки
 node build_store_zip.js    # собрать ZIP для Chrome Web Store в dist/
+powershell -ExecutionPolicy Bypass -File build_store_images.ps1  # картинки карточки
 node bump_version.js 1.7.3 # поднять версию в манифесте и футере попапа
 ```
 

@@ -21,6 +21,7 @@ node generate_icons.js     # regenerate all 20 PNGs in icons/ (zero deps, hand-r
 node test_aia_chain.js     # AIA chain building + signature verification (needs network)
 node test_whitelist.js     # verdicts + per-domain whitelist binding (offline)
 node build_store_zip.js    # package dist/ca-indicator-<version>.zip for the Web Store
+powershell -File build_store_images.ps1  # regenerate store/ listing images (Windows only)
 node bump_version.js 1.7.3  # bump the version in both places it appears
 ```
 
