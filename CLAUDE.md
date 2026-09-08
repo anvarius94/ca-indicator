@@ -20,6 +20,7 @@ node build_root_store.js   # regenerate trusted_roots.json from Chrome Root Stor
 node generate_icons.js     # regenerate all 20 PNGs in icons/ (zero deps, hand-rolled PNG encoder)
 node test_aia_chain.js     # AIA chain building + signature verification (needs network)
 node test_whitelist.js     # verdicts + per-domain whitelist binding (offline)
+node build_store_zip.js    # package dist/ca-indicator-<version>.zip for the Web Store
 node bump_version.js 1.7.3  # bump the version in both places it appears
 ```
 

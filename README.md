@@ -237,6 +237,7 @@ node test_extension.js     # манифест, иконки, разбор ASN.1,
 node test_aia_chain.js     # достройка цепочки и проверка подписей (нужна сеть)
 node build_root_store.js   # пересобрать trusted_roots.json
 node generate_icons.js     # перерисовать иконки
+node build_store_zip.js    # собрать ZIP для Chrome Web Store в dist/
 node bump_version.js 1.7.3 # поднять версию в манифесте и футере попапа
 ```
 
