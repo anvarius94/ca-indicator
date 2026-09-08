@@ -281,8 +281,10 @@
       const posClass = config.bannerPosition === 'bottom_right' ? 'ca-pos-bottom-right' : 'ca-pos-top-right';
       pill.className = `ca-floating-pill ca-pill-trusted ${posClass}`;
       pill.innerHTML = `
-        <span>🛡️</span>
-        <span>Доверенный УЦ: <strong>${escapeHtml(issuer)}</strong></span>
+        <span>${status.whitelisted ? '\u{1F464}' : '\u{1F6E1}\u{FE0F}'}</span>
+        <span>${status.whitelisted
+          ? 'Разрешено вами для этого домена'
+          : 'Доверенный УЦ: <strong>' + escapeHtml(issuer) + '</strong>'}</span>
         <button class="ca-close-btn" title="Закрыть">✕</button>
       `;
 

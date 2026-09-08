@@ -201,6 +201,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else if (res.anyBroken) {
         elAiaVerdict.className = 'aia-verdict bad';
         elAiaVerdict.textContent = 'Подпись в цепочке не сходится: сертификат подписан не тем ключом, который заявлен. Это прямой признак подмены.';
+      } else if (currentTabStatus && currentTabStatus.whitelisted) {
+        // Для сертификата, разрешённого вручную, отсутствие AIA и цепочки —
+        // ожидаемая норма, а не тревога. Красный вердикт под зелёной карточкой
+        // только сбивал бы с толку.
+        elAiaVerdict.className = 'aia-verdict unknown';
+        elAiaVerdict.textContent = res.outcome === 'no-aia-on-leaf'
+          ? 'Цепочки нет: сертификат не ссылается на издателя и ни к какому публичному корню не ведёт. Для сертификата, который вы разрешили вручную, это нормально.'
+          : 'Цепочку до публичного корня достроить не удалось — для сертификата, разрешённого вручную, это ожидаемо.';
       } else {
         const [cls, text] = AIA_OUTCOMES[res.outcome] || ['unknown', 'Результат неизвестен.'];
         elAiaVerdict.className = 'aia-verdict ' + cls;
@@ -261,11 +269,18 @@ document.addEventListener('DOMContentLoaded', async () => {
       btnWhitelist.style.display = 'block';
     } else if (status.level === 'trusted') {
       if (elFlagAlert) elFlagAlert.style.display = 'none';
-      elStatusIcon.textContent = '🛡️';
-      elLevelBadge.textContent = 'ПУБЛИЧНЫЙ УЦ · CT';
-      elHeadline.textContent = 'Соединение доверенное';
+      if (status.whitelisted) {
+        // Публичным этот УЦ не является и подписей CT у него нет: доверие
+        // держится только на вашем решении и только для этого домена.
+        elStatusIcon.textContent = '👤';
+        elLevelBadge.textContent = 'РАЗРЕШЕНО ВАМИ';
+        elHeadline.textContent = 'Исключение для этого домена';
+      } else {
+        elStatusIcon.textContent = '🛡️';
+        elLevelBadge.textContent = 'ПУБЛИЧНЫЙ УЦ · CT';
+        elHeadline.textContent = 'Соединение доверенное';
+      }
       elDesc.textContent = status.riskDescription || 'В сертификате есть подписи Certificate Transparency.';
-      btnWhitelist.style.display = 'none';
     } else if (status.level === 'warning') {
       elStatusIcon.textContent = '⚠️';
       elLevelBadge.textContent = 'СЕРТИФИКАТ НЕ РАЗОБРАН';
