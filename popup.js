@@ -131,7 +131,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Запрос статуса у фонового воркера
-  chrome.runtime.sendMessage({ type: 'GET_TAB_STATUS', tabId: activeTab.id }, response => {
+  chrome.runtime.sendMessage({ type: 'GET_TAB_STATUS', tabId: activeTab.id, url: activeTab.url }, response => {
     if (chrome.runtime.lastError || !response) {
       renderFallback(activeTab.url, false);
       return;
@@ -179,7 +179,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     elAiaVerdict.style.display = 'none';
     elAiaChain.innerHTML = '';
 
-    chrome.runtime.sendMessage({ type: 'VERIFY_CHAIN_AIA', tabId }, res => {
+    chrome.runtime.sendMessage({ type: 'VERIFY_CHAIN_AIA', tabId, url: activeTab.url }, res => {
       elAiaLoader.style.display = 'none';
       elAiaVerdict.style.display = 'block';
 
@@ -282,6 +282,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         elHeadline.textContent = 'Соединение доверенное';
       }
       elDesc.textContent = status.riskDescription || 'В сертификате есть подписи Certificate Transparency.';
+    }
+
+    // Не выдаём запомненное за свежее измерение
+    if (status.fromSessionMemory) {
+      elDesc.textContent += ' Страница пришла из кэша, поэтому показан вердикт, полученный при её первой загрузке в этой сессии.';
     } else if (status.level === 'warning') {
       elStatusIcon.textContent = '⚠️';
       if (status.parseFailed) {

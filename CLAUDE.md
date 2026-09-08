@@ -206,8 +206,17 @@ Consequences to keep in mind: the loop over `si.certificates` always runs exactl
 ### State and messaging
 
 Per-tab analysis lives in the in-memory `tabStatusMap` **and** is mirrored into
-`chrome.storage.session` under `tab_<id>` by `saveTabStatus()`; `loadTabStatus()` reads through to
-it. Without that mirror the service worker's ~30 s suspension wipes the map, the popup sees a null
+`chrome.storage.session` twice: under `tab_<id>` by `saveTabStatus()` and under `origin_<origin>`
+by `saveOriginStatus()`. `loadTabStatus(tabId, url)` reads through to both — the tab entry first,
+the origin entry as a fallback tagged `fromSessionMemory`.
+
+The origin fallback exists because a navigation does not always reach the network: the site's own
+service worker (Gmail), bfcache, or restoring a discarded tab all skip `onHeadersReceived`, so no
+fresh certificate arrives. The content really did come over the connection already verified, so
+reusing that verdict is accurate, not merely convenient — but the popup must say so rather than
+pass it off as a fresh measurement. **Never clear stored status on navigation start**; an earlier
+version did, and it left the popup blind on exactly these pages while the in-page banner still
+showed the truth. Cross-origin leakage is prevented by `sameOrigin()` checks, not by deletion. Without that mirror the service worker's ~30 s suspension wipes the map, the popup sees a null
 status, and it used to render that as "enable the flag" — which was the extension's most visible
 bug. Anything new that writes per-tab state must go through `saveTabStatus`, not `tabStatusMap.set`.
 

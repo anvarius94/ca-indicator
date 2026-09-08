@@ -23,16 +23,57 @@ async function saveTabStatus(tabId, data) {
   } catch (e) { /* storage.session недоступен */ }
 }
 
-async function loadTabStatus(tabId) {
-  if (tabStatusMap.has(tabId)) return tabStatusMap.get(tabId);
+// Вердикт помнится ещё и по происхождению, а не только по вкладке. Навигация
+// не всегда доходит до сети: страницу отдаёт service worker сайта, bfcache или
+// восстановление выгруженной вкладки. Сертификат при этом заново не
+// запрашивается — но содержимое реально пришло по той связи, которую мы уже
+// проверили, поэтому помнить её вердикт корректно, а не только удобно.
+function originKey(url) {
+  try {
+    return 'origin_' + new URL(url).origin;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function saveOriginStatus(url, data) {
+  const key = originKey(url);
+  if (!key) return;
+  try {
+    await chrome.storage.session.set({ [key]: data });
+  } catch (e) { /* storage.session недоступен */ }
+}
+
+// url необязателен. Если передан — вердикт обязан относиться к тому же
+// происхождению, иначе он не применяется и ищется запись по происхождению.
+async function loadTabStatus(tabId, url) {
+  const fits = st => !url || !st?.url || sameOrigin(st.url, url);
+
+  if (tabStatusMap.has(tabId)) {
+    const st = tabStatusMap.get(tabId);
+    if (fits(st)) return st;
+  }
   try {
     const key = 'tab_' + tabId;
     const res = await chrome.storage.session.get([key]);
-    if (res && res[key]) {
+    if (res && res[key] && fits(res[key])) {
       tabStatusMap.set(tabId, res[key]);
       return res[key];
     }
   } catch (e) { /* ignore */ }
+
+  if (url) {
+    const okey = originKey(url);
+    if (okey) {
+      try {
+        const res = await chrome.storage.session.get([okey]);
+        if (res && res[okey]) {
+          // Помечаем явно: это вердикт из памяти сессии, а не свежее измерение
+          return { ...res[okey], fromSessionMemory: true };
+        }
+      } catch (e) { /* ignore */ }
+    }
+  }
   return null;
 }
 
@@ -572,6 +613,7 @@ function registerWebRequestListener() {
         tabStatusMap.set(tabId, record);
         updateBrowserAction(tabId, analysis);
         await saveTabStatus(tabId, record);
+        await saveOriginStatus(url, record);
 
         // Уведомляем контентный скрипт вкладки
         chrome.tabs.sendMessage(tabId, {
@@ -654,14 +696,25 @@ registerWebRequestListener();
 // На части страниц (в том числе предзагруженных, как gemini.google.com) коммит
 // происходит уже ПОСЛЕ onHeadersReceived, и значок откатывался к синему.
 // Поэтому применяем сохранённый статус ещё раз, когда вкладка догрузилась.
+function restoreTabAction(tabId, url) {
+  // Происхождение передаём внутрь: loadTabStatus сам отсечёт вердикт от чужого
+  // сайта и при необходимости достанет запомненный для этого происхождения.
+  loadTabStatus(tabId, url).then(status => {
+    if (status) updateBrowserAction(tabId, status);
+  });
+}
+
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
-  loadTabStatus(tabId).then(status => {
-    if (!status) return;
-    // Сохранённый вердикт применяем только к тому же происхождению: иначе
-    // значок предыдущего сайта переехал бы на новый, для которого данных нет.
-    if (tab?.url && status.url && !sameOrigin(status.url, tab.url)) return;
-    updateBrowserAction(tabId, status);
+  restoreTabAction(tabId, tab?.url);
+});
+
+// Переключение между вкладками: у выгруженной и заново поднятой вкладки значок
+// сбрасывается, и без этого сайт выглядел бы потерявшим доверие.
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  chrome.tabs.get(tabId, tab => {
+    if (chrome.runtime.lastError || !tab) return;
+    restoreTabAction(tabId, tab.url);
   });
 });
 
@@ -763,7 +816,7 @@ async function reanalyzeTab(tabId) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_TAB_STATUS') {
     const tabId = message.tabId || sender?.tab?.id;
-    loadTabStatus(tabId).then(status => {
+    loadTabStatus(tabId, message.url).then(status => {
       sendResponse({
         status,
         userWhitelist,
@@ -784,7 +837,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'VERIFY_CHAIN_AIA') {
-    loadTabStatus(message.tabId).then(async status => {
+    loadTabStatus(message.tabId, message.url).then(async status => {
       if (!status || !status.leafDerB64) {
         sendResponse({ success: false, error: 'Для этой вкладки нет сертификата' });
         return;
