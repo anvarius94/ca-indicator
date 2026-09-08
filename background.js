@@ -255,6 +255,16 @@ function formatName(obj) {
 
 // Доверие действует только для той пары «домен + сертификат», которую
 // пользователь разрешил явно.
+// Вердикт относится к конкретному происхождению и не должен переезжать на
+// соседний сайт вместе с вкладкой.
+function sameOrigin(a, b) {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch (e) {
+    return false;
+  }
+}
+
 function isWhitelisted(host, fingerprint) {
   if (!host || !fingerprint) return false;
   return userWhitelist.some(e => e && e.host === host && e.fingerprint === fingerprint);
@@ -516,10 +526,12 @@ let securityInfoError = null;
 chrome.webRequest.onBeforeRequest.addListener(
   details => {
     if (details.tabId >= 0 && details.type === 'main_frame') {
-      // Навигация началась — прошлый статус этой вкладки больше не действителен.
-      // Без этого popup показывал бы данные предыдущего сайта на новом домене.
-      tabStatusMap.delete(details.tabId);
-      chrome.storage.session.remove('tab_' + details.tabId).catch(() => {});
+      // Статус здесь НЕ удаляем. Навигация не всегда доходит до сети: страницу
+      // может отдать service worker самого сайта (так делает Gmail), bfcache или
+      // предзагрузка. Тогда onHeadersReceived не срабатывает, и удалённый статус
+      // уже ничем не восстановить — попап слепнет, хотя плашка на странице
+      // продолжает показывать верный вердикт. Показ данных чужого сайта
+      // предотвращается сверкой происхождения в попапе и ниже, а не удалением.
 
       // Предварительное состояние загрузки
       chrome.action.setBadgeText({ tabId: details.tabId, text: '...' });
@@ -642,10 +654,14 @@ registerWebRequestListener();
 // На части страниц (в том числе предзагруженных, как gemini.google.com) коммит
 // происходит уже ПОСЛЕ onHeadersReceived, и значок откатывался к синему.
 // Поэтому применяем сохранённый статус ещё раз, когда вкладка догрузилась.
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
   loadTabStatus(tabId).then(status => {
-    if (status) updateBrowserAction(tabId, status);
+    if (!status) return;
+    // Сохранённый вердикт применяем только к тому же происхождению: иначе
+    // значок предыдущего сайта переехал бы на новый, для которого данных нет.
+    if (tab?.url && status.url && !sameOrigin(status.url, tab.url)) return;
+    updateBrowserAction(tabId, status);
   });
 });
 

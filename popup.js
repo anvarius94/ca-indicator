@@ -367,7 +367,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     elStatusIcon.textContent = '🔄';
     elLevelBadge.textContent = 'НЕТ ДАННЫХ';
     elHeadline.textContent = 'Обновите страницу';
-    elDesc.textContent = 'Сертификат считывается в момент загрузки страницы. Эта вкладка была открыта раньше, чем расширение начало слушать запросы.';
+    elDesc.textContent = 'Сертификат считывается в момент загрузки страницы. Эта вкладка была открыта раньше, чем расширение начало слушать запросы, либо страницу отдал из кэша сам сайт. Кнопка ниже перезагружает с обходом кэша.';
     elIssuer.textContent = '—';
     elSubject.textContent = elSiteDomain.textContent;
     elFingerprint.textContent = '—';
@@ -375,7 +375,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (btnReload) {
       btnReload.style.display = 'block';
       btnReload.onclick = () => {
-        chrome.tabs.reload(activeTab.id);
+        // Обычная перезагрузка бесполезна, если страницу отдаёт service
+        // worker сайта из кэша: сертификат заново не запрашивается. Обходим кэш.
+        chrome.tabs.reload(activeTab.id, { bypassCache: true });
         window.close();
       };
     }
