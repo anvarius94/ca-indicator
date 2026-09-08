@@ -70,6 +70,14 @@ function leafOf(host) {
       const leaf = await leafOf(host);
       const r = await M.verifyChainViaAia(leaf);
 
+      if (r.outcome === 'no-aia-on-leaf') {
+        console.error('\n!! У сертификата ' + host + ' нет ссылки на издателя (AIA).');
+        console.error('   Полученный издатель: ' + (r.chain[0] && r.chain[0].issuer));
+        console.error('   Так выглядит перехват на самой машине: антивирус с проверкой HTTPS,');
+        console.error('   корпоративный DPI или прокси подменили сертификат. Отключите перехват');
+        console.error('   и повторите — тест обращается к живым сайтам напрямую.');
+        process.exit(1);
+      }
       assert.strictEqual(r.outcome, 'root-found', host + ': цепочка не достроена до корня (' + r.outcome + ')');
       assert.strictEqual(r.trusted, true, host + ': цепочка не признана доверенной');
       assert.strictEqual(r.anyBroken, false, host + ': в цепочке есть несходящаяся подпись');

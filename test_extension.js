@@ -167,7 +167,17 @@ for (const item of testDomains) {
     const parsed = parseCertificate(peerCert.raw);
     assert.ok(parsed, `Failed to parse DER for ${item.host}`);
     const name = [parsed.issuer.O, parsed.issuer.CN].filter(Boolean).join(' / ');
-    assert.strictEqual(parsed.hasSct, true, `У ${item.host} нет SCT — публичный сертификат обязан их иметь`);
+    // Отсутствие SCT у публичного сайта почти всегда означает не поломку кода,
+    // а перехват на самой машине: антивирус с проверкой HTTPS или корпоративный
+    // DPI подменяют сертификат, и Node получает уже их подделку.
+    if (!parsed.hasSct) {
+      console.error('\n!! У ' + item.host + ' нет подписей Certificate Transparency.');
+      console.error('   Издатель полученного сертификата: ' + name);
+      console.error('   Похоже, трафик этой машины перехватывается: антивирус с проверкой');
+      console.error('   HTTPS, корпоративный DPI или прокси. Отключите перехват и повторите.');
+      console.error('   Расширение в такой ситуации как раз и должно показывать предупреждение.');
+      process.exit(1);
+    }
     console.log(`✔ ${item.host} -> Issuer: "${name}", SCT: есть`);
     socket.end();
     completed++;

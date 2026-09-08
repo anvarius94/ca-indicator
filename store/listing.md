@@ -107,12 +107,22 @@ Chrome не передаёт расширениям данные сертифи�
 
 ### Изображения
 
-| Что | Файл |
-|---|---|
-| Скриншот 1 | `store/screenshot-1-public.png` |
-| Скриншот 2 | `store/screenshot-2-invalid.png` |
-| Скриншот 3 | `store/screenshot-3-whitelist.png` |
-| Промо-плитка 440×280 | `store/promo-440x280.png` |
+Все файлы — 24-битный PNG без альфа-канала, как требует магазин.
+
+| Что | Размер | Файл |
+|---|---|---|
+| Скриншот 1 — публичный УЦ | 1280×800 | `store/screenshot-1-public.png` |
+| Скриншот 2 — перехват | 1280×800 | `store/screenshot-2-intercepted.png` |
+| Скриншот 3 — недействительный | 1280×800 | `store/screenshot-3-invalid.png` |
+| Скриншот 4 — ваше исключение | 1280×800 | `store/screenshot-4-whitelist.png` |
+| Промо-плитка (обязательна) | 440×280 | `store/promo-440x280.png` |
+| Большое рекламное изображение | 1400×560 | `store/marquee-1400x560.png` |
+
+Пересобрать после изменения интерфейса:
+
+```
+powershell -ExecutionPolicy Bypass -File build_store_images.ps1
+```
 
 ---
 

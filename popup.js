@@ -284,10 +284,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       elDesc.textContent = status.riskDescription || 'В сертификате есть подписи Certificate Transparency.';
     } else if (status.level === 'warning') {
       elStatusIcon.textContent = '⚠️';
-      elLevelBadge.textContent = 'СЕРТИФИКАТ НЕ РАЗОБРАН';
-      elHeadline.textContent = 'Проверка не выполнена';
+      if (status.parseFailed) {
+        elLevelBadge.textContent = 'СЕРТИФИКАТ НЕ РАЗОБРАН';
+        elHeadline.textContent = 'Проверка не выполнена';
+      } else {
+        // Основной случай: сертификат разобран, подписей CT в нём нет.
+        // Говорить здесь «проверка не выполнена» — прямая неправда: проверка
+        // выполнена, и результат её как раз тревожный.
+        elLevelBadge.textContent = 'БЕЗ CERTIFICATE TRANSPARENCY';
+        elHeadline.textContent = 'Возможен перехват трафика';
+      }
       elDesc.textContent = status.riskDescription || 'Структуру сертификата не удалось разобрать, проверка Certificate Transparency не проводилась.';
-      btnWhitelist.style.display = 'none';
     } else if (status.level === 'insecure') {
       if (elFlagAlert) elFlagAlert.style.display = 'none';
       elStatusIcon.textContent = '🔓';

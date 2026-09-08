@@ -260,7 +260,9 @@
       pill.className = `ca-floating-pill ca-pill-warning ${posClass}`;
       pill.innerHTML = `
         <span>⚠️</span>
-        <span>Сертификат не разобран: <strong>${escapeHtml(issuer)}</strong></span>
+        <span>${status.parseFailed
+          ? 'Сертификат не разобран: <strong>' + escapeHtml(issuer) + '</strong>'
+          : 'Без Certificate Transparency: <strong>' + escapeHtml(issuer) + '</strong>'}</span>
         <button class="ca-close-btn" title="Закрыть">✕</button>
       `;
 
