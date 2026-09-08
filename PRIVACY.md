@@ -60,11 +60,11 @@
 ## Открытый код
 
 Расширение распространяется под лицензией MIT, исходный код полностью открыт:
-https://github.com/anvarius94/ca-indicator
+https://github.com/anvarius94/ca-trust-indicator
 
 Любое утверждение из этого документа можно проверить по коду — расширения Chrome не
 компилируются, и установленную у себя копию вы можете прочитать целиком.
 
 ## Вопросы
 
-Через issues репозитория: https://github.com/anvarius94/ca-indicator/issues
+Через issues репозитория: https://github.com/anvarius94/ca-trust-indicator/issues

@@ -128,19 +128,26 @@ New-Shot -ShotFile "not-trusted-cert.png" `
         "Браузер при этом показывает обычный замок и молчит: подмена для него законна, ведь корню доверяет сама система."
     ) -Accent $amber -OutFile "screenshot-2-intercepted.png"
 
+New-Shot -ShotFile "no-encryption.png" `
+    -Title "Страница без шифрования" `
+    -Lines @(
+        "Соединение по HTTP: пароли, cookies и содержимое страницы идут открытым текстом.",
+        "Прочитать и подменить их может любой посредник в сети — провайдер, владелец точки доступа, кто угодно на пути."
+    ) -Accent $red -OutFile "screenshot-3-no-encryption.png"
+
 New-Shot -ShotFile "invalid-cert.png" `
     -Title "Браузер забраковал сертификат" `
     -Lines @(
         "Сертификат просрочен, отозван, самоподписан или выдан не на этот домен.",
         "Расширение ничего не блокирует: сайт открывается как обычно, вы просто видите, чем именно он защищён."
-    ) -Accent $red -OutFile "screenshot-3-invalid.png"
+    ) -Accent $red -OutFile "screenshot-4-invalid.png"
 
 New-Shot -ShotFile "whitelisted.png" `
     -Title "Ваше исключение для домена" `
     -Lines @(
         "Свой сервер можно разрешить вручную. Доверие привязано к паре «домен + сертификат»: на других доменах он доверенным не считается.",
         "Если сертификат на этом домене подменят, предупреждение вернётся."
-    ) -Accent $amber -OutFile "screenshot-4-whitelist.png"
+    ) -Accent $amber -OutFile "screenshot-5-whitelist.png"
 
 # ---------- Промо-плитка 440x280 ----------
 $c = New-Canvas -W 440 -H 280
@@ -225,7 +232,7 @@ Write-Output "Большое рекламное изображение:"
 Write-Output "  marquee-1400x560.png  1400x560  24-bit"
 
 # Старые имена скриншотов сменились — убираем, чтобы не путались
-foreach ($old in @("screenshot-2-invalid.png", "screenshot-3-whitelist.png")) {
+foreach ($old in @("screenshot-2-invalid.png", "screenshot-3-whitelist.png", "screenshot-3-invalid.png", "screenshot-4-whitelist.png")) {
     $p = Join-Path $outDir $old
     if (Test-Path $p) { Remove-Item $p; Write-Output "Удалён устаревший файл: $old" }
 }

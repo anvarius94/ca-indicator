@@ -121,7 +121,7 @@ function buildZip(files) {
 const version = JSON.parse(fs.readFileSync(path.join(__dirname, 'manifest.json'), 'utf8')).version;
 const files = collect();
 const zip = buildZip(files);
-const out = path.join(__dirname, 'dist', 'ca-indicator-' + version + '.zip');
+const out = path.join(__dirname, 'dist', 'ca-trust-indicator-' + version + '.zip');
 
 fs.mkdirSync(path.join(__dirname, 'dist'), { recursive: true });
 fs.writeFileSync(out, zip);

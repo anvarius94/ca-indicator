@@ -94,7 +94,7 @@ Chrome не передаёт расширениям данные сертифи�
 
 Исходящих запросов два, оба по вашему действию: за сертификатом издателя при открытии расширения (адрес такого запроса указывает на удостоверяющий центр, а не на сайт) и за обновлением базы корневых центров.
 
-Исходный код открыт: https://github.com/anvarius94/ca-indicator
+Исходный код открыт: https://github.com/anvarius94/ca-trust-indicator
 ```
 
 ### Категория
@@ -113,8 +113,9 @@ Chrome не передаёт расширениям данные сертифи�
 |---|---|---|
 | Скриншот 1 — публичный УЦ | 1280×800 | `store/screenshot-1-public.png` |
 | Скриншот 2 — перехват | 1280×800 | `store/screenshot-2-intercepted.png` |
-| Скриншот 3 — недействительный | 1280×800 | `store/screenshot-3-invalid.png` |
-| Скриншот 4 — ваше исключение | 1280×800 | `store/screenshot-4-whitelist.png` |
+| Скриншот 3 — нет шифрования | 1280×800 | `store/screenshot-3-no-encryption.png` |
+| Скриншот 4 — недействительный | 1280×800 | `store/screenshot-4-invalid.png` |
+| Скриншот 5 — ваше исключение | 1280×800 | `store/screenshot-5-whitelist.png` |
 | Промо-плитка (обязательна) | 440×280 | `store/promo-440x280.png` |
 | Большое рекламное изображение | 1400×560 | `store/marquee-1400x560.png` |
 
@@ -177,7 +178,7 @@ powershell -ExecutionPolicy Bypass -File build_store_images.ps1
 ### Политика приватности
 
 ```
-https://github.com/anvarius94/ca-indicator/blob/main/PRIVACY.md
+https://github.com/anvarius94/ca-trust-indicator/blob/main/PRIVACY.md
 ```
 
 ---
