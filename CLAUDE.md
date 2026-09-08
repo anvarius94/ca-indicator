@@ -95,6 +95,20 @@ pass. Closing that requires verifying the SCT signatures, not another list.
 `trustedRootsMap` and the weekly Google root-store update still exist and still cannot fire (leaf
 only, see above). They are kept for the day Chrome exposes the chain, not because they do work.
 
+### Active origin probe
+
+When the popup finds no verdict for an https page it sends `PROBE_ORIGIN`, and `probeOrigin()`
+fetches the origin itself to obtain the certificate. This exists because a navigation served by the
+site's own service worker (Gmail does this on an ordinary reload) never reaches the network, so
+`onHeadersReceived` never fires and no certificate is available — reloading the page does not help,
+which is why the popup offers a cache-bypassing reload.
+
+The fetch sends `credentials: 'omit'` so the user's cookies never ride along, and goes to a site
+the user already has open, so it tells that server nothing new. The `securityInfo` listener it needs
+is added **for that one origin and removed right after** — a permanent listener would make Chrome
+build certificate details for every xhr on every page. Results are tagged `fromProbe` and the popup
+says the certificate came from a separate request.
+
 ### On-demand AIA verification
 
 Opening the popup fires `VERIFY_CHAIN_AIA`, and `verifyChainViaAia()` rebuilds the real chain the

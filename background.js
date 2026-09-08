@@ -785,6 +785,55 @@ async function updateRootStoreFromGoogle() {
   };
 }
 
+// Активная проверка происхождения. Запрос уходит на тот сайт, который уже
+// открыт у пользователя, поэтому ничего нового о нём никому не сообщает; куки
+// не отправляются. Вызывается только из попапа и только когда данных нет.
+async function probeOrigin(url) {
+  let origin;
+  try {
+    origin = new URL(url).origin;
+  } catch (e) {
+    return null;
+  }
+  if (!origin.startsWith('https:')) return null;
+
+  let captured = null;
+
+  // Слушатель ставится только на время проверки и только на один адрес.
+  // Постоянный слушатель заставлял бы Chrome считать securityInfo для каждого
+  // xhr-запроса каждой открытой страницы.
+  const onHeaders = details => {
+    // tabId === -1 отличает наш собственный запрос от запроса страницы
+    if (details.tabId !== -1 || !details.securityInfo) return;
+    captured = details.securityInfo;
+  };
+
+  try {
+    chrome.webRequest.onHeadersReceived.addListener(
+      onHeaders,
+      { urls: [origin + '/*'], types: ['xmlhttprequest', 'other'] },
+      ['securityInfo', 'securityInfoRawDer']
+    );
+  } catch (e) {
+    return null;
+  }
+
+  try {
+    await fetch(origin + '/', {
+      method: 'GET',
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'manual'
+    });
+  } catch (e) {
+    // Отказ не важен: TLS-соединение к этому моменту уже состоялось,
+    // а значит сертификат уже прошёл через слушатель.
+  }
+
+  chrome.webRequest.onHeadersReceived.removeListener(onHeaders);
+  return captured;
+}
+
 // Пересчитывает вердикт по уже сохранённому сертификату — нужно после правки
 // белого списка, чтобы плашка и значок обновились сразу, без перезагрузки.
 async function reanalyzeTab(tabId) {
@@ -833,6 +882,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       });
     });
+    return true;
+  }
+
+  if (message.type === 'PROBE_ORIGIN') {
+    probeOrigin(message.url).then(async si => {
+      if (!si) {
+        sendResponse({ success: false, error: 'Сертификат получить не удалось' });
+        return;
+      }
+      const analysis = await analyzeSecurityInfo(si, message.url);
+      const leafRaw = si?.certificates?.[0]?.rawDER;
+      if (leafRaw) analysis.leafDerB64 = bytesToB64(leafRaw);
+      analysis.securityState = si.state || '';
+      analysis.fromProbe = true;
+
+      const record = { ...analysis, url: message.url, timestamp: Date.now() };
+      if (message.tabId >= 0) {
+        tabStatusMap.set(message.tabId, record);
+        updateBrowserAction(message.tabId, analysis);
+        await saveTabStatus(message.tabId, record);
+      }
+      await saveOriginStatus(message.url, record);
+      sendResponse({ success: true, status: analysis });
+    }).catch(e => sendResponse({ success: false, error: e?.message || String(e) }));
     return true;
   }
 

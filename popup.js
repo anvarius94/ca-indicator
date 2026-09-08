@@ -155,6 +155,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     // и без этой проверки popup показывал бы сертификат предыдущего сайта.
     if (!response.status || !sameOrigin(response.status.url, activeTab.url)) {
       renderFallback(activeTab.url, flagMissing);
+      // Данных нет, но страница защищена: спрашиваем сертификат сами, вместо
+      // того чтобы предлагать перезагрузку. Обычное обновление тут не помогает —
+      // страницу отдаёт из кэша сам сайт, и сеть не задействуется.
+      if (!flagMissing && /^https:/.test(activeTab.url)) startProbe(activeTab.url);
       return;
     }
 
@@ -232,6 +236,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  function startProbe(url) {
+    elStatusCard.className = 'status-card status-loading';
+    elStatusIcon.textContent = '⏳';
+    elLevelBadge.textContent = 'ПРОВЕРЯЮ';
+    elHeadline.textContent = 'Запрашиваю сертификат сайта';
+    elDesc.textContent = 'Страница открылась из кэша, поэтому расширение запрашивает сертификат отдельно.';
+    if (btnReload) btnReload.style.display = 'none';
+
+    chrome.runtime.sendMessage({ type: 'PROBE_ORIGIN', url, tabId: activeTab.id }, res => {
+      if (chrome.runtime.lastError || !res || !res.success) {
+        renderFallback(url, false);
+        return;
+      }
+      currentTabStatus = res.status;
+      renderStatus(currentTabStatus);
+      if (currentTabStatus.leafDerB64) startAiaVerification(activeTab.id);
+    });
+  }
+
   function renderRootStoreInfo(info) {
     if (elRootCount) elRootCount.textContent = info.count ?? '—';
     if (elRootDate) {
@@ -282,6 +305,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         elHeadline.textContent = 'Соединение доверенное';
       }
       elDesc.textContent = status.riskDescription || 'В сертификате есть подписи Certificate Transparency.';
+    }
+
+    if (status.fromProbe) {
+      elDesc.textContent += ' Сертификат получен отдельным запросом к сайту: страница открылась из кэша, без обращения к сети.';
     }
 
     // Не выдаём запомненное за свежее измерение
