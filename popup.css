@@ -75,16 +75,6 @@ body {
   -webkit-text-fill-color: transparent;
 }
 
-.privacy-badge {
-  font-size: 10px;
-  font-weight: 600;
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.12);
-  padding: 3px 7px;
-  border-radius: 9999px;
-  border: 1px solid rgba(56, 189, 248, 0.3);
-}
-
 /* Site bar */
 .site-bar {
   display: flex;

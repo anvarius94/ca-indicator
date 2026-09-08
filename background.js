@@ -1,5 +1,7 @@
 // background.js - CA Indicator Service Worker
-// 100% Offline, Privacy-Preserving Certificate Trust & MITM Interception Detector
+// Определяет перехват TLS по Certificate Transparency.
+// Пассивный путь офлайн; сеть используется только при открытом попапе
+// (достройка цепочки по AIA) и при обновлении базы корней.
 
 // ===== 1. Списки доверенных и подозрительных центров =====
 
