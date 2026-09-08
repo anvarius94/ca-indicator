@@ -19,6 +19,7 @@ node test_extension.js     # full test suite (see caveat below)
 node build_root_store.js   # regenerate trusted_roots.json from Chrome Root Store + Mozilla NSS
 node generate_icons.js     # regenerate all 20 PNGs in icons/ (zero deps, hand-rolled PNG encoder)
 node test_aia_chain.js     # AIA chain building + signature verification (needs network)
+node test_whitelist.js     # verdicts + per-domain whitelist binding (offline)
 node bump_version.js 1.3.1  # bump the version in all three places it appears
 ```
 
@@ -69,13 +70,19 @@ The verdict now comes from one bit: does the leaf carry embedded SCTs — X.509 
 
 - SCTs present → `trusted`. CT logs only accept certificates from publicly trusted CAs, so a
   locally installed root cannot obtain them.
-- SCTs absent, issuer in `userWhitelist` → `trusted`. The legitimate no-CT case is a company's
-  internal CA, so the popup offers the whitelist button.
+- The user whitelist is checked **first**, before everything else, and is keyed on the pair
+  `{host, fingerprint}` — never on the issuer name. Trusting a certificate on your own server must
+  not make it trusted anywhere else, and a swapped certificate on the same host must alarm again.
+  Legacy string entries are dropped on load by `initRootStore`.
 - SCTs absent → `warning` (amber). Chrome only enforces CT for chains to *public* roots; chains to
   a locally installed root are exempt, which is the carve-out antivirus and DPI rely on. This is
   deliberately **not** red: the instant check is a suspicion, and the popup's AIA pass is what
   settles it.
 - DER unparseable → `warning`. This level no longer means "unknown CA".
+- `si.state === 'broken'` (expired, revoked, self-signed, wrong host) → `danger`, but only **after**
+  the certificate is parsed. It used to return early with the literal issuer name
+  "Недействительный сертификат" and no fingerprint, which meant the whitelist could never apply to
+  the one case that needs it most — your own server with a self-signed certificate.
 - Plain HTTP → `insecure`, painted **red** (badge, icon, popup card, in-page banner). An
   unencrypted page is treated as more urgent than a certificate that merely lacks CT.
 

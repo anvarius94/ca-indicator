@@ -211,20 +211,19 @@
 
   function displayIndicator(status) {
     if (!status || !status.level) return;
-    if (config.bannerMode === 'never') return;
 
-    // Filter by banner mode
-    if (config.bannerMode === 'threats_only' && status.level === 'trusted') {
-      return; // Do not show banner for trusted if threats_only is active
-    }
-
-    const sr = getOrCreateShadowRoot();
-
-    // Remove existing banner if any
+    // Старую плашку снимаем ВСЕГДА и до проверок режима. Раньше выход по
+    // «только угрозы» + trusted происходил раньше удаления, и красный баннер
+    // оставался висеть после того, как вердикт уже сменился на доверенный.
     if (currentBanner && currentBanner.parentNode) {
       currentBanner.parentNode.removeChild(currentBanner);
       currentBanner = null;
     }
+
+    if (config.bannerMode === 'never') return;
+    if (config.bannerMode === 'threats_only' && status.level === 'trusted') return;
+
+    const sr = getOrCreateShadowRoot();
 
     const issuer = status.issuerName || '(неизвестный УЦ)';
 

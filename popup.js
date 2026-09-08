@@ -32,6 +32,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let lastAia = null;
 
   let currentTabStatus = null;
+  let currentHost = '';
   let currentWhitelist = [];
 
   // 1. Load preferences
@@ -78,6 +79,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   try {
     const urlObj = new URL(activeTab.url);
+    currentHost = urlObj.hostname;
     elSiteDomain.textContent = urlObj.hostname || activeTab.url;
 
     if (urlObj.protocol === 'chrome:' || urlObj.protocol === 'edge:' || urlObj.protocol === 'about:') {
@@ -276,8 +278,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       elLevelBadge.textContent = 'НЕТ ШИФРОВАНИЯ';
       elHeadline.textContent = 'Открытое соединение HTTP';
       elDesc.textContent = 'Данные передаются в незашифрованном виде. Любой посредник может их перехватить.';
-      btnWhitelist.style.display = 'none';
     }
+
+    // Разрешить можно только конкретный сертификат на конкретном домене,
+    // поэтому без отпечатка кнопка не имеет смысла.
+    const canWhitelist = Boolean(status.fingerprint) && !status.whitelisted &&
+      (status.level === 'warning' || status.level === 'danger');
+    btnWhitelist.style.display = canWhitelist ? 'block' : 'none';
   }
 
   function renderRestrictedPage(name) {
@@ -372,20 +379,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Whitelist current CA
+  // Доверие выдаётся паре «этот домен + этот сертификат»
   btnWhitelist.addEventListener('click', () => {
-    if (!currentTabStatus || !currentTabStatus.issuerName) return;
-    const nameToAdd = currentTabStatus.issuerName;
-    chrome.runtime.sendMessage({ type: 'ADD_WHITELIST', name: nameToAdd }, res => {
-      if (res && res.success) {
-        currentWhitelist = res.userWhitelist;
-        renderWhitelist(currentWhitelist);
-        btnWhitelist.style.display = 'none';
-        // Re-render as trusted
-        currentTabStatus.level = 'trusted';
-        currentTabStatus.riskDescription = 'УЦ добавлен вами в белый список доверенных.';
-        renderStatus(currentTabStatus);
-      }
+    if (!currentTabStatus || !currentTabStatus.fingerprint || !currentHost) return;
+    chrome.runtime.sendMessage({
+      type: 'ADD_WHITELIST',
+      host: currentHost,
+      fingerprint: currentTabStatus.fingerprint,
+      issuer: currentTabStatus.issuerName || '',
+      tabId: activeTab.id
+    }, res => {
+      if (!res || !res.success) return;
+      currentWhitelist = res.userWhitelist;
+      renderWhitelist(currentWhitelist);
+      currentTabStatus.level = 'trusted';
+      currentTabStatus.whitelisted = true;
+      currentTabStatus.riskDescription =
+        'Вы сами разрешили этот сертификат для домена ' + currentHost + '. На других доменах он доверенным не считается.';
+      renderStatus(currentTabStatus);
     });
   });
 
@@ -396,15 +407,33 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    list.forEach(name => {
+    list.forEach(entry => {
       const li = document.createElement('li');
-      li.textContent = name;
+
+      const text = document.createElement('span');
+      text.className = 'wl-entry';
+      const host = document.createElement('strong');
+      host.textContent = entry.host;
+      text.appendChild(host);
+      if (entry.issuer) {
+        const issuer = document.createElement('span');
+        issuer.className = 'wl-issuer';
+        issuer.textContent = ' — ' + entry.issuer;
+        text.appendChild(issuer);
+      }
+      li.appendChild(text);
+
       const btnDel = document.createElement('button');
       btnDel.className = 'btn-remove-wl';
       btnDel.textContent = '✕';
-      btnDel.title = 'Удалить из белого списка';
+      btnDel.title = 'Отозвать доверие для ' + entry.host;
       btnDel.addEventListener('click', () => {
-        chrome.runtime.sendMessage({ type: 'REMOVE_WHITELIST', name }, res => {
+        chrome.runtime.sendMessage({
+          type: 'REMOVE_WHITELIST',
+          host: entry.host,
+          fingerprint: entry.fingerprint,
+          tabId: activeTab.id
+        }, res => {
           if (res && res.userWhitelist) {
             currentWhitelist = res.userWhitelist;
             renderWhitelist(currentWhitelist);

@@ -642,3 +642,12 @@ code {
 .tech-details .detail-row {
   padding-top: 0;
 }
+
+/* Записи белого списка: домен + издатель */
+.wl-entry {
+  word-break: break-word;
+}
+.wl-issuer {
+  color: var(--text-muted);
+  font-size: 11px;
+}

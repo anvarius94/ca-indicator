@@ -57,7 +57,13 @@ async function initRootStore() {
   try {
     const res = await chrome.storage.local.get(['userWhitelist', 'flagConfirmed', 'customRoots', 'rootStoreUpdatedAt']);
     if (Array.isArray(res.userWhitelist)) {
-      userWhitelist = res.userWhitelist;
+      // Раньше записи были строками с именем УЦ и действовали на любой домен.
+      // Теперь запись — это {host, fingerprint, issuer}; строки отбрасываем,
+      // потому что доверять имени издателя на всех доменах небезопасно.
+      userWhitelist = res.userWhitelist.filter(e => e && typeof e === 'object' && e.host && e.fingerprint);
+      if (userWhitelist.length !== res.userWhitelist.length) {
+        chrome.storage.local.set({ userWhitelist });
+      }
     }
     if (res.flagConfirmed) {
       flagConfirmed = true;
@@ -247,6 +253,13 @@ function formatName(obj) {
   return [obj.O, obj.CN].filter(Boolean).join(' / ') || obj.CN || obj.O || '(без имени)';
 }
 
+// Доверие действует только для той пары «домен + сертификат», которую
+// пользователь разрешил явно.
+function isWhitelisted(host, fingerprint) {
+  if (!host || !fingerprint) return false;
+  return userWhitelist.some(e => e && e.host === host && e.fingerprint === fingerprint);
+}
+
 function checkMatch(name, list) {
   if (!name) return false;
   const n = name.toLowerCase();
@@ -306,21 +319,6 @@ async function analyzeSecurityInfo(si, url) {
       subjectName: hostname,
       fingerprint: '',
       riskDescription: 'Трафик передается в открытом виде без шифрования TLS. Данные могут перехватываться любым участником сети.',
-      certificates: []
-    };
-  }
-
-  if (si.state === 'broken') {
-    return {
-      level: 'danger',
-      badge: '!',
-      badgeColor: '#dc2626',
-      iconTheme: 'danger',
-      title: '🚨 Ошибка сертификата: TLS-соединение скомпрометировано',
-      issuerName: 'Недействительный сертификат',
-      subjectName: hostname,
-      fingerprint: '',
-      riskDescription: 'Chrome отметил соединение как broken: сертификат просрочен, отозван, самоподписан или не соответствует домену.',
       certificates: []
     };
   }
@@ -385,6 +383,47 @@ async function analyzeSecurityInfo(si, url) {
   const issuerName = leaf.issuerStr || '(без имени)';
   const subjectName = leaf.subjectStr || hostname;
 
+  // Доверие пользователя привязано к паре «домен + отпечаток»: сертификат,
+  // которому вы доверяете на своём сервере, не должен считаться доверенным
+  // на постороннем домене.
+  const trustedByUser = isWhitelisted(hostname, leaf.fingerprint);
+
+  if (trustedByUser) {
+    return {
+      level: 'trusted',
+      badge: 'OK',
+      badgeColor: '#16a34a',
+      iconTheme: 'trusted',
+      title: '🛡️ Сертификат из вашего белого списка\nДомен: ' + hostname + '\nИздатель: ' + issuerName,
+      issuerName: issuerName,
+      subjectName: subjectName,
+      fingerprint: leaf.fingerprint,
+      hasSct: Boolean(leaf.hasSct),
+      whitelisted: true,
+      riskDescription: 'Вы сами разрешили этот сертификат для домена ' + hostname + '. На других доменах он доверенным не считается.',
+      certificates: parsedChain
+    };
+  }
+
+  // Chrome забраковал сам сертификат: просрочен, отозван, самоподписан или
+  // выдан не на этот домен. Теперь у нас есть разобранные имя и отпечаток,
+  // поэтому в белый список попадает осмысленная запись, а не заглушка.
+  if (si.state === 'broken') {
+    return {
+      level: 'danger',
+      badge: '!',
+      badgeColor: '#dc2626',
+      iconTheme: 'danger',
+      title: '🚨 Ошибка сертификата\nДомен: ' + hostname + '\nИздатель: ' + issuerName,
+      issuerName: issuerName,
+      subjectName: subjectName,
+      fingerprint: leaf.fingerprint,
+      certificateError: true,
+      riskDescription: 'Chrome отметил соединение как недействительное: сертификат просрочен, отозван, самоподписан или выдан не на этот домен. Если это ваш собственный сервер, сертификат можно разрешить — но только для домена ' + hostname + '.',
+      certificates: parsedChain
+    };
+  }
+
   // Разобрать DER не удалось — судить не о чем, молчим вместо догадок.
   if (parseFailed) {
     return {
@@ -415,23 +454,6 @@ async function analyzeSecurityInfo(si, url) {
       matchedRoot: matchedHashRoot,
       hasSct: true,
       riskDescription: 'В сертификате есть подписи CT-логов (SCT). Их выдают только публично доверенным удостоверяющим центрам, поэтому локально установленный корень — антивирус, корпоративный DPI, государственный УЦ — такой сертификат подделать не может.',
-      certificates: parsedChain
-    };
-  }
-
-  // Издателя добавил сам пользователь — например, корпоративный внутренний УЦ.
-  if (checkMatch(leaf.issuerStr, userWhitelist)) {
-    return {
-      level: 'trusted',
-      badge: 'OK',
-      badgeColor: '#16a34a',
-      iconTheme: 'trusted',
-      title: '🛡️ УЦ из вашего белого списка\nИздатель: ' + issuerName,
-      issuerName: issuerName,
-      subjectName: subjectName,
-      fingerprint: leaf.fingerprint,
-      hasSct: false,
-      riskDescription: 'Подписей Certificate Transparency нет, но этот издатель добавлен вами в белый список вручную.',
       certificates: parsedChain
     };
   }
@@ -525,6 +547,7 @@ function registerWebRequestListener() {
         const analysis = await analyzeSecurityInfo(securityInfo, url);
         const leafRaw = securityInfo?.certificates?.[0]?.rawDER;
         if (leafRaw) analysis.leafDerB64 = bytesToB64(leafRaw);
+        analysis.securityState = securityInfo?.state || '';
 
         // Значок обновляем СРАЗУ, до записи в storage: ждать завершения
         // асинхронной записи здесь значило задерживать появление статуса.
@@ -687,6 +710,32 @@ async function updateRootStoreFromGoogle() {
   };
 }
 
+// Пересчитывает вердикт по уже сохранённому сертификату — нужно после правки
+// белого списка, чтобы плашка и значок обновились сразу, без перезагрузки.
+async function reanalyzeTab(tabId) {
+  if (!(tabId >= 0)) return;
+  const prev = await loadTabStatus(tabId);
+  if (!prev || !prev.leafDerB64 || !prev.securityState) return;
+
+  const si = {
+    state: prev.securityState,
+    certificates: [{
+      rawDER: b64ToBytes(prev.leafDerB64),
+      fingerprint: { sha256: prev.fingerprint || '' }
+    }]
+  };
+
+  const analysis = await analyzeSecurityInfo(si, prev.url);
+  analysis.leafDerB64 = prev.leafDerB64;
+  analysis.securityState = prev.securityState;
+
+  const next = { ...analysis, url: prev.url, timestamp: Date.now() };
+  tabStatusMap.set(tabId, next);
+  updateBrowserAction(tabId, analysis);
+  saveTabStatus(tabId, next);
+  chrome.tabs.sendMessage(tabId, { type: 'CA_STATUS_UPDATE', payload: analysis }).catch(() => {});
+}
+
 // ===== 7. Обработка сообщений от Popup и Content Script =====
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -738,23 +787,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'ADD_WHITELIST') {
-    const caName = message.name?.trim();
-    if (caName && !userWhitelist.includes(caName)) {
-      userWhitelist.push(caName);
-      chrome.storage.local.set({ userWhitelist }, () => {
-        sendResponse({ success: true, userWhitelist });
-      });
+    const host = (message.host || '').trim();
+    const fingerprint = (message.fingerprint || '').trim();
+    const issuer = (message.issuer || '').trim();
+
+    // Без домена и отпечатка запись бессмысленна: доверять «вообще всему»
+    // от этого издателя — ровно та дыра, которую расширение и ищет.
+    if (!host || !fingerprint) {
+      sendResponse({ success: false, error: 'Нет домена или отпечатка сертификата' });
       return true;
     }
-    sendResponse({ success: false });
+
+    if (!isWhitelisted(host, fingerprint)) {
+      userWhitelist.push({ host, fingerprint, issuer, addedAt: new Date().toISOString() });
+    }
+    chrome.storage.local.set({ userWhitelist }, () => {
+      reanalyzeTab(message.tabId).then(() => {
+        sendResponse({ success: true, userWhitelist });
+      });
+    });
     return true;
   }
 
   if (message.type === 'REMOVE_WHITELIST') {
-    const caName = message.name;
-    userWhitelist = userWhitelist.filter(x => x !== caName);
+    userWhitelist = userWhitelist.filter(
+      e => !(e && e.host === message.host && e.fingerprint === message.fingerprint)
+    );
     chrome.storage.local.set({ userWhitelist }, () => {
-      sendResponse({ success: true, userWhitelist });
+      reanalyzeTab(message.tabId).then(() => {
+        sendResponse({ success: true, userWhitelist });
+      });
     });
     return true;
   }
