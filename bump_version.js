@@ -1,4 +1,6 @@
-// bump_version.js - синхронно поднимает версию во всех трёх местах, где она указана.
+// bump_version.js - синхронно поднимает версию в обоих местах, где она указана.
+// В manifest.name версии больше нет: магазин показывает её отдельно, а меняющееся
+// при каждом релизе название плохо сказывается на поиске и выглядит неаккуратно.
 // Использование: node bump_version.js 1.3.1
 const fs = require('fs');
 
@@ -21,11 +23,10 @@ if (!html.includes('CA Indicator v' + prev)) {
   process.exit(1);
 }
 
-m.name = m.name.split('v' + prev).join('v' + next);
 m.version = next;
 fs.writeFileSync('manifest.json', JSON.stringify(m, null, 2) + '\n');
 fs.writeFileSync('popup.html', html.split('CA Indicator v' + prev).join('CA Indicator v' + next));
 
 console.log(prev + ' -> ' + next);
-console.log('  manifest.json: version + name');
+console.log('  manifest.json: version');
 console.log('  popup.html:    футер');

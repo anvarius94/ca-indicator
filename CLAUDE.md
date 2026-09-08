@@ -20,7 +20,7 @@ node build_root_store.js   # regenerate trusted_roots.json from Chrome Root Stor
 node generate_icons.js     # regenerate all 20 PNGs in icons/ (zero deps, hand-rolled PNG encoder)
 node test_aia_chain.js     # AIA chain building + signature verification (needs network)
 node test_whitelist.js     # verdicts + per-domain whitelist binding (offline)
-node bump_version.js 1.3.1  # bump the version in all three places it appears
+node bump_version.js 1.7.3  # bump the version in both places it appears
 ```
 
 `test_extension.js` is a single sequential script using `node:assert` — there is no runner and no
@@ -143,10 +143,11 @@ rejection, so it is caught explicitly.
 
 ### Versioning and git
 
-The version string lives in **three** places: `manifest.json` `version`, `manifest.json` `name`
-(which embeds `v1.3.0`), and the `popup.html` footer. Never edit them by hand — run
-`node bump_version.js <major.minor.patch>`, which updates all three and fails loudly if the footer
-marker has drifted.
+The version string lives in **two** places: `manifest.json` `version` and the `popup.html` footer.
+Never edit them by hand — run `node bump_version.js <major.minor.patch>`, which updates both and
+fails loudly if the footer marker has drifted. `manifest.json` `name` deliberately carries **no**
+version: the Chrome Web Store shows the version separately, and a name that changes every release
+hurts search and looks sloppy.
 
 Commit each user-visible change with the version bump in the same commit, so `git log` doubles as
 the version history and any released state can be checked out directly. `.backup/` and `.staged/`

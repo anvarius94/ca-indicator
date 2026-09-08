@@ -262,11 +262,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     } else if (status.level === 'danger') {
       if (elFlagAlert) elFlagAlert.style.display = 'none';
       elStatusIcon.textContent = '🚨';
-      elLevelBadge.textContent = 'ВНЕ CERTIFICATE TRANSPARENCY';
-      elHeadline.textContent = 'Трафик расшифровывается!';
-      elDesc.textContent = status.riskDescription || 'В сертификате нет подписей CT-логов: он выпущен локально установленным корнем.';
-      // Единственный законный случай без CT — внутренний УЦ компании.
-      btnWhitelist.style.display = 'block';
+      // Этот уровень теперь возникает только при si.state === 'broken'.
+      // Текст про отсутствие CT остался от v1.5.0 и вводил в заблуждение:
+      // просроченный сертификат — не то же самое, что перехват трафика.
+      elLevelBadge.textContent = 'НЕДЕЙСТВИТЕЛЬНЫЙ СЕРТИФИКАТ';
+      elHeadline.textContent = 'Chrome забраковал сертификат';
+      elDesc.textContent = status.riskDescription || 'Сертификат просрочен, отозван, самоподписан или выдан не на этот домен.';
     } else if (status.level === 'trusted') {
       if (elFlagAlert) elFlagAlert.style.display = 'none';
       if (status.whitelisted) {
