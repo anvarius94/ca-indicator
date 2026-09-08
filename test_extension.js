@@ -1,4 +1,4 @@
-// test_extension.js - Automated tests for CA Indicator logic
+// test_extension.js - Automated tests for CA Trust Indicator logic
 
 const fs = require('fs');
 const path = require('path');

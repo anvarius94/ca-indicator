@@ -18,14 +18,14 @@ if (prev === next) {
 }
 
 const html = fs.readFileSync('popup.html', 'utf8');
-if (!html.includes('CA Indicator v' + prev)) {
-  console.error('popup.html: не найден футер "CA Indicator v' + prev + '", версия не изменена');
+if (!html.includes('CA Trust Indicator v' + prev)) {
+  console.error('popup.html: не найден футер "CA Trust Indicator v' + prev + '", версия не изменена');
   process.exit(1);
 }
 
 m.version = next;
 fs.writeFileSync('manifest.json', JSON.stringify(m, null, 2) + '\n');
-fs.writeFileSync('popup.html', html.split('CA Indicator v' + prev).join('CA Indicator v' + next));
+fs.writeFileSync('popup.html', html.split('CA Trust Indicator v' + prev).join('CA Trust Indicator v' + next));
 
 console.log(prev + ' -> ' + next);
 console.log('  manifest.json: version');

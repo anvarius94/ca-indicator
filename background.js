@@ -1,4 +1,4 @@
-// background.js - CA Indicator Service Worker
+// background.js - CA Trust Indicator Service Worker
 // Определяет перехват TLS по Certificate Transparency.
 // Пассивный путь офлайн; сеть используется только при открытом попапе
 // (достройка цепочки по AIA) и при обновлении базы корней.
@@ -551,11 +551,15 @@ function registerWebRequestListener() {
         if (leafRaw) analysis.leafDerB64 = bytesToB64(leafRaw);
         analysis.securityState = securityInfo?.state || '';
 
-        // Значок обновляем СРАЗУ, до записи в storage: ждать завершения
-        // асинхронной записи здесь значило задерживать появление статуса.
-        tabStatusMap.set(tabId, { ...analysis, url, timestamp: Date.now() });
+        // Значок обновляем СРАЗУ, до записи в storage, чтобы не задерживать
+        // появление статуса. Но саму запись обязательно дожидаемся: без await
+        // обработчик завершается, Chrome усыпляет service worker, и запись
+        // может не долететь. Тогда плашка на странице уже показана, а попап
+        // при следующем открытии видит пустоту и говорит «обновите страницу».
+        const record = { ...analysis, url, timestamp: Date.now() };
+        tabStatusMap.set(tabId, record);
         updateBrowserAction(tabId, analysis);
-        saveTabStatus(tabId, { ...analysis, url, timestamp: Date.now() });
+        await saveTabStatus(tabId, record);
 
         // Уведомляем контентный скрипт вкладки
         chrome.tabs.sendMessage(tabId, {
@@ -572,7 +576,7 @@ function registerWebRequestListener() {
     // вообще не знает значений securityInfo.
     isSecurityInfoSupported = false;
     securityInfoError = err?.message || String(err);
-    console.warn('CA Indicator: securityInfo extraInfoSpec отвергнут браузером:', securityInfoError);
+    console.warn('CA Trust Indicator: securityInfo extraInfoSpec отвергнут браузером:', securityInfoError);
   }
 
   // Зондовый слушатель: регистрируется ВСЕГДА и без extraInfoSpec.
@@ -624,7 +628,7 @@ function registerWebRequestListener() {
         flagRequired: true
       };
 
-      saveTabStatus(tabId, { ...flagNotice, url, timestamp: Date.now() });
+      saveTabStatus(tabId, { ...flagNotice, url, timestamp: Date.now() }).catch(() => {});
       updateBrowserAction(tabId, flagNotice);
     },
     { urls: ['<all_urls>'], types: ['main_frame'] }
@@ -734,7 +738,7 @@ async function reanalyzeTab(tabId) {
   const next = { ...analysis, url: prev.url, timestamp: Date.now() };
   tabStatusMap.set(tabId, next);
   updateBrowserAction(tabId, analysis);
-  saveTabStatus(tabId, next);
+  await saveTabStatus(tabId, next);
   chrome.tabs.sendMessage(tabId, { type: 'CA_STATUS_UPDATE', payload: analysis }).catch(() => {});
 }
 
@@ -846,8 +850,8 @@ chrome.runtime.onStartup.addListener(ensureRootStoreAlarm);
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name !== ROOT_STORE_ALARM) return;
   updateRootStoreFromGoogle()
-    .then(r => console.log('CA Indicator: база корней обновлена, записей:', r.count))
-    .catch(e => console.warn('CA Indicator: обновление базы не удалось:', e?.message || e));
+    .then(r => console.log('CA Trust Indicator: база корней обновлена, записей:', r.count))
+    .catch(e => console.warn('CA Trust Indicator: обновление базы не удалось:', e?.message || e));
 });
 
 // ===== 9. Точная перепроверка цепочки по AIA (запускается из попапа) =====

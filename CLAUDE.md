@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Chrome MV3 extension ("CA Indicator") that reads the TLS certificate chain of the top-level
+A Chrome MV3 extension ("CA Trust Indicator") that reads the TLS certificate chain of the top-level
 navigation and classifies the issuing CA as trusted / interceptor / unknown, surfacing the result
 as a toolbar badge, a toolbar icon, an in-page banner, and a popup. All UI strings are Russian.
 

@@ -1,4 +1,4 @@
-// generate_icons.js - Generates crisp PNG icons for CA Indicator states
+// generate_icons.js - Generates crisp PNG icons for CA Trust Indicator states
 // Zero external dependencies, pure Node.js using built-in zlib.
 
 const fs = require('fs');

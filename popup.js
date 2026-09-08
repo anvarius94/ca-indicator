@@ -1,4 +1,4 @@
-// popup.js - CA Indicator User Interface Logic
+// popup.js - CA Trust Indicator User Interface Logic
 
 document.addEventListener('DOMContentLoaded', async () => {
   const elSiteDomain = document.getElementById('site-domain');
@@ -471,7 +471,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Отчёт простым текстом: удобно вставить в переписку или в чат с ИИ
   function buildReport() {
     const L = [];
-    L.push('CA Indicator v' + chrome.runtime.getManifest().version + ' — отчёт о сертификате');
+    L.push('CA Trust Indicator v' + chrome.runtime.getManifest().version + ' — отчёт о сертификате');
     L.push('Сайт: ' + elSiteDomain.textContent);
     L.push('Вердикт: ' + elLevelBadge.textContent + ' — ' + elHeadline.textContent);
     L.push('Издатель: ' + elIssuer.textContent);

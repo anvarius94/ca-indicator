@@ -1,4 +1,4 @@
-// content.js - CA Indicator In-Page Visual Feedback
+// content.js - CA Trust Indicator In-Page Visual Feedback
 // Isolated via Shadow DOM to guarantee zero conflict with website styles
 
 (function () {

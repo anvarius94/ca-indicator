@@ -102,7 +102,7 @@ function New-Shot {
 
     $fName = New-Object System.Drawing.Font("Segoe UI Semibold", 17, [System.Drawing.FontStyle]::Bold)
     $bName = New-Object System.Drawing.SolidBrush $blue
-    $g.DrawString("CA Indicator", $fName, $bName, $tx, ($H - 110))
+    $g.DrawString("CA Trust Indicator", $fName, $bName, $tx, ($H - 110))
     $fName.Dispose(); $bName.Dispose()
     $fTitle.Dispose(); $fBody.Dispose(); $bTitle.Dispose(); $bBody.Dispose()
 
@@ -154,9 +154,9 @@ $icon = [System.Drawing.Image]::FromFile((Join-Path $root "icons\icon-trusted-12
 $g.DrawImage($icon, 28, 44, 84, 84)
 $icon.Dispose()
 
-$fT = New-Object System.Drawing.Font("Segoe UI Semibold", 25, [System.Drawing.FontStyle]::Bold)
+$fT = New-Object System.Drawing.Font("Segoe UI Semibold", 21, [System.Drawing.FontStyle]::Bold)
 $bT = New-Object System.Drawing.SolidBrush $textMain
-$g.DrawString("CA Indicator", $fT, $bT, 126, 48)
+$g.DrawString("CA Trust Indicator", $fT, $bT, 126, 52)
 $fT.Dispose(); $bT.Dispose()
 
 $fS = New-Object System.Drawing.Font("Segoe UI", 12)
@@ -200,7 +200,7 @@ $icon.Dispose()
 
 $fT = New-Object System.Drawing.Font("Segoe UI Semibold", 42, [System.Drawing.FontStyle]::Bold)
 $bT = New-Object System.Drawing.SolidBrush $textMain
-$g.DrawString("CA Indicator", $fT, $bT, 162, 100)
+$g.DrawString("CA Trust Indicator", $fT, $bT, 162, 100)
 $fT.Dispose(); $bT.Dispose()
 
 $fS = New-Object System.Drawing.Font("Segoe UI Semibold", 21, [System.Drawing.FontStyle]::Bold)

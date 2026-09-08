@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "CA Indicator — Проверка УЦ и Детектор Перехвата",
-  "version": "1.7.3",
+  "name": "CA Trust Indicator — Проверка УЦ и Детектор Перехвата",
+  "version": "1.8.0",
   "description": "Ничего не блокирует — показывает, какие сайты защищены глобально доверенным УЦ, а какие — корнем с вашего компьютера.",
   "minimum_chrome_version": "144",
   "permissions": [
@@ -17,7 +17,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "CA Indicator - Проверка сертификата",
+    "default_title": "CA Trust Indicator - Проверка сертификата",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",
